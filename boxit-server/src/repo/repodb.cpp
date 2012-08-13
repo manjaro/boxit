@@ -118,6 +118,7 @@ bool RepoDB::createRepo(QString name, QString architecture) {
     QTextStream out(&file);
     out << "###\n### BoxIt Repository Config\n###\n";
     out << "\nstate = newboxitrepo";
+    out << "\nsync =";
     file.close();
 
 
