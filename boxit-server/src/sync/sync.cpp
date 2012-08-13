@@ -38,6 +38,7 @@ Sync::~Sync() {
 
 bool Sync::synchronize(QString url, const QString repoName, const QString excludeFilePath, QStringList &allDBPackages, QStringList checkFilePaths, QStringList onlyFiles) {
     QStringList patterns;
+    QList<Package> downloadPackages;
 
     if (busy) {
         emit error("A synchronization process is already running!");
@@ -97,11 +98,8 @@ bool Sync::synchronize(QString url, const QString repoName, const QString exclud
         goto error; // Error messages are emited by the method...
 
 
-    // Download each file
+    // Create a list only with the packages to download
     for (int i = 0; i < packages.size(); ++i) {
-        // Update status
-        emit status(i + 1, packages.size());
-
         Package package = packages.at(i);
         allDBPackages.append(package.fileName);
 
@@ -115,6 +113,17 @@ bool Sync::synchronize(QString url, const QString repoName, const QString exclud
         // Check if file already exists
         if (fileAlreadyExist(package, checkFilePaths))
             continue;
+
+        downloadPackages.append(package);
+    }
+
+
+    // Download each file
+    for (int i = 0; i < downloadPackages.size(); ++i) {
+        // Update status
+        emit status(i + 1, downloadPackages.size());
+
+        Package package = downloadPackages.at(i);
 
         // Download file...
         if (!downloadFile(url + package.fileName))
