@@ -5,6 +5,6 @@
 
 DESTPATH="/path/to/destination"
 RSYNCURL="rsync://manjaro.org/repos"
-RSYNC="rsync -rtlvH --delete-after --delay-updates --copy-links --max-delete=10000"
+RSYNC="rsync -rtlvH --delete-after --delay-updates --safe-links"
 
 $RSYNC "$RSYNCURL" "$DESTPATH"
