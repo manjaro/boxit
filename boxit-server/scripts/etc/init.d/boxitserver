@@ -19,7 +19,7 @@ case "$1" in
       su boxit -c /usr/bin/boxit-server &>/var/log/boxitserver.log &
       ;;
    stop)
-      echo "Stoppe fuchsserver..."
+      echo "Stopping boxit server..."
       killall boxit-server
       ;;
    restart|reload|force-reload)

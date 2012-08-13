@@ -1,0 +1,10 @@
+#!/bin/bash
+
+# This script should be a cronjob and should be run a few times a day. (example for /etc/crontab: 0 */4 *  *  * root /usr/bin/manjaroreposync)
+# To be an official Manjaro Linux mirror and to get access to our rsync server, you have to tell us your static ip of your synchronization server.
+
+DESTPATH="/path/to/destination"
+RSYNCURL="rsync://manjaro.org/repos"
+RSYNC="rsync -rtlvH --delete-after --delay-updates --copy-links --max-delete=10000"
+
+$RSYNC "$RSYNCURL" "$DESTPATH"
