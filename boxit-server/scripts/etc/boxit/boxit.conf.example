@@ -1,0 +1,9 @@
+##
+## BoxIt Server Config
+##
+
+mailingListEMail = mailinglist@project.org
+salt = SaltHere
+repoDir = /var/www/repo
+sslcertificate = /etc/boxit/certificates/server.csr
+sslkey = /etc/boxit/certificates/server.key
