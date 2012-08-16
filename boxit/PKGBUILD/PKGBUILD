@@ -1,0 +1,43 @@
+# maintainer: Philip Müller <philm[at]manjaro[dog]org>
+# maintainer: Roland Singer <roland[at]manjaro[dog]org>
+
+pkgname=boxit
+pkgver=0.1
+pkgrel=1
+pkgdesc="Manjaro Linux repository management system - client"
+arch=('i686' 'x86_64')
+url="http://git.manjaro.org"
+license=('GPL')
+depends=('qt' 'readline')
+_git=yes
+
+getsource() {
+  cd "$srcdir"
+  msg "Connecting to GIT server...."
+
+  if [ -d $1 ] ; then
+    if [ "$_git" == "yes" ] ; then
+       cd $1 && git pull origin master
+    else
+       cd $1 && git pull origin master && git checkout -b $pkgver
+    fi
+    msg "The local files are updated."
+  else
+    git clone $2 $1
+    if [ "$_git" != "yes" ] ; then
+       cd $1 && git checkout -b $pkgver $pkgver
+    fi
+  fi
+
+  msg "GIT checkout done or server timeout"
+}
+
+build() {
+  getsource "boxit" "git://git.manjaro.org/core/boxit.git"
+
+  cd "${srcdir}/${pkgname}/${pkgname}/src"
+
+  qmake
+  make all
+  make INSTALL_ROOT="${pkgdir}" install
+}
