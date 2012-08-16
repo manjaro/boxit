@@ -26,6 +26,7 @@
 #include <QByteArray>
 #include <QDataStream>
 #include <QList>
+#include <QSslError>
 #include <iostream>
 #include "const.h"
 

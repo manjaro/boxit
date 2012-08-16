@@ -22,6 +22,7 @@
 
 #include <QString>
 #include <QSslSocket>
+#include <QSslError>
 #include <QByteArray>
 #include <QDataStream>
 #include <QList>

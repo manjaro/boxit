@@ -163,15 +163,18 @@ void BoxitSocket::socketError() {
 
 
 void BoxitSocket::sslErrors(const QList<QSslError> &errors) {
-  QString errorStrings;
-  foreach (QSslError error, errors)
-  {
-    errorStrings += error.errorString();
-    if (error != errors.last())
-    {
-      errorStrings += '\n';
-    }
-  }
+    bool first = true;
 
-  cerr << "SSL error(s): " << errorStrings.toAscii().data() << endl;
+    foreach (QSslError error, errors)
+    {
+        if (error.error() == QSslError::HostNameMismatch || error.error() == QSslError::SelfSignedCertificate)
+            continue;
+
+        if (first) {
+             cerr << "SSL error(s): ";
+             first = false;
+        }
+
+        cerr << error.errorString().toAscii().data() << endl;
+    }
 }
