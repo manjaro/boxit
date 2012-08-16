@@ -5,7 +5,32 @@
 # To be an official Manjaro Linux mirror and to get access to our rsync server, you have to tell us your static ip of your synchronization server.
 
 DESTPATH="/path/to/destination"
-RSYNCURL="rsync://manjaro.org/repos"
-RSYNC="rsync -rtlvH --delete-after --delay-updates --safe-links"
+RSYNC=/usr/bin/rsync
+LOCKFILE=/tmp/rsync-manjaro.lock
 
-$RSYNC "$RSYNCURL" "$DESTPATH"
+
+
+synchronize() {
+    $RSYNC -rtlvH --delete-after --delay-updates --safe-links rsync://manjaro.org/repos "$DESTPATH"
+}
+
+
+
+if [ ! -e "$LOCKFILE" ]
+then
+    echo $$ >"$LOCKFILE"
+    synchronize
+else
+    PID=$(cat "$LOCKFILE")
+    if kill -0 "$PID" >&/dev/null
+    then
+        echo "Rsync - Synchronization still running"
+        exit 0
+    else
+        echo $$ >"$LOCKFILE"
+        echo "Warning: previous synchronization appears not to have finished correctly"
+        synchronize
+    fi
+fi
+
+rm -f "$LOCKFILE"
