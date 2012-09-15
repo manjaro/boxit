@@ -230,13 +230,14 @@ void Pool::run() {
             QString filename = addFiles.at(i);
             QString file = Global::getConfig().poolDir + "/" + filename;
             QString dest = lockedRepo->getPath() + "/" + filename;
+            QString link = "../../" + QString(BOXIT_POOL_REPO) + "/" + filename;
 
-            if (!QFile::exists(file) || (!QFile::exists(dest) && !QFile::link(file, dest))) {
+            if (!QFile::exists(file) || (!QFile::exists(dest) && !QFile::link(link, dest))) {
                 emitMessage(QString("error: failed to link '%1'!").arg(file));
                 goto error;
             }
 
-            if (QFile::exists(file + BOXIT_SIGNATURE_ENDING) && !QFile::exists(dest + BOXIT_SIGNATURE_ENDING) && !QFile::link(file + BOXIT_SIGNATURE_ENDING, dest + BOXIT_SIGNATURE_ENDING))  {
+            if (QFile::exists(file + BOXIT_SIGNATURE_ENDING) && !QFile::exists(dest + BOXIT_SIGNATURE_ENDING) && !QFile::link(link + BOXIT_SIGNATURE_ENDING, dest + BOXIT_SIGNATURE_ENDING))  {
                 emitMessage(QString("error: failed to link '%1'!").arg(file + BOXIT_SIGNATURE_ENDING));
                 goto error;
             }

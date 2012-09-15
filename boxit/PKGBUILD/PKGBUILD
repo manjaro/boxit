@@ -2,7 +2,7 @@
 # maintainer: Roland Singer <roland[at]manjaro[dog]org>
 
 pkgname=boxit
-pkgver=2.0
+pkgver=2.0.1
 pkgrel=1
 pkgdesc="Manjaro Linux repository management system - client"
 arch=('i686' 'x86_64')
