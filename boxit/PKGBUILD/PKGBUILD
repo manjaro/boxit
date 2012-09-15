@@ -2,14 +2,14 @@
 # maintainer: Roland Singer <roland[at]manjaro[dog]org>
 
 pkgname=boxit
-pkgver=0.1.1
+pkgver=2.0
 pkgrel=1
 pkgdesc="Manjaro Linux repository management system - client"
 arch=('i686' 'x86_64')
 url="http://git.manjaro.org"
 license=('GPL')
 depends=('qt' 'readline')
-_git=yes
+_git=no
 
 getsource() {
   cd "$srcdir"

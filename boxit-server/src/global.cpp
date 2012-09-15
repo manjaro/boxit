@@ -46,83 +46,12 @@ QString Global::getNameofPKG(QString pkg) {
 
 
 
-bool Global::buildPackageDB(QString workPath, QString repoDB) {
-    if (QFile::exists(workPath + "/" + repoDB) && !QFile::remove(workPath + "/" + repoDB))
-        return false;
+QString Global::getVersionofPKG(QString pkg) {
+    pkg = pkg.split("/", QString::SkipEmptyParts).last();
+    pkg = pkg.section("-", -3, -1);
+    pkg.remove(pkg.lastIndexOf("-"), pkg.size());
 
-    QProcess process;
-    process.setProcessChannelMode(QProcess::MergedChannels);
-    process.setWorkingDirectory(workPath);
-
-    process.start("repo-add", QStringList() << workPath + "/" + repoDB <<  QDir(workPath).entryList(QString(BOXIT_FILE_FILTERS).split(" ", QString::SkipEmptyParts), QDir::Files | QDir::NoDotAndDotDot, QDir::Name));
-
-    if (!process.waitForFinished(-1))
-        return false;
-
-    if (process.exitCode() != 0)
-        return false;
-
-    return QFile::exists(workPath + "/" + repoDB);
-}
-
-
-
-bool Global::commitNewPackages(QString workPath, QString destPath, QStringList &addedFiles, QString &error) {
-    addedFiles = QDir(workPath).entryList(QString(BOXIT_FILE_FILTERS).split(" ", QString::SkipEmptyParts), QDir::Files | QDir::NoDotAndDotDot, QDir::Name);
-
-    for (int i = 0; i < addedFiles.size(); ++i) {
-        QString file = addedFiles.at(i);
-
-        if (!movePackage(workPath + "/" + file, destPath + "/" + file, error))
-            return false; // Error string is filled by the method...
-
-        if (QFile::exists(workPath + "/" + file + BOXIT_SIGNATURE_ENDING) && !movePackage(workPath + "/" + file + BOXIT_SIGNATURE_ENDING, destPath + "/" + file + BOXIT_SIGNATURE_ENDING, error))
-            return false; // Error string is filled by the method...
-    }
-
-    return true;
-}
-
-
-
-bool Global::addPackagesToDatabase(const QString path, const QString repoDB, const QStringList &packages) {
-    if (packages.isEmpty())
-        return true;
-
-    QProcess process;
-    process.setWorkingDirectory(path);
-    process.start("repo-add", QStringList() << repoDB <<  packages);
-
-    if (!process.waitForFinished(-1))
-        return false;
-
-    if (process.exitCode() != 0)
-        return false;
-
-    return true;
-}
-
-
-
-bool Global::removePackagesFromDatabase(const QString path, const QString repoDB, QStringList packages) {
-    if (packages.isEmpty())
-        return true;
-
-    // We need only the package name
-    for (int i = 0; i < packages.size(); ++i)
-        packages[i] = Global::getNameofPKG(packages.at(i));
-
-    QProcess process;
-    process.setWorkingDirectory(path);
-    process.start("repo-remove", QStringList() << repoDB <<  packages);
-
-    if (!process.waitForFinished(-1))
-        return false;
-
-    if (process.exitCode() != 0)
-        return false;
-
-    return true;
+    return pkg;
 }
 
 
@@ -155,7 +84,7 @@ bool Global::sendMemoEMail(QString username, QString repository, QString archite
         mailMessage += "\n\n\n### Removed package(s) ###\n\n" + removedFiles.join("\n");
 
     // Send e-mail message to mailing list
-    return Global::sendEMail("BoxIt commit memo", Global::getConfig().mailingListEMail, mailMessage);
+    return Global::sendEMail("[BoxIt] commit memo", Global::getConfig().mailingListEMail, mailMessage);
 }
 
 
@@ -279,43 +208,27 @@ bool Global::readConfig() {
 
         QString arg1 = line.split("=").first().toLower().trimmed(), arg2 = line.split("=").last().trimmed();
 
-        if (arg1 == "salt")
+        if (arg1 == "salt") {
             config.salt = arg2;
-        else if (arg1 == "repodir")
+        }
+        else if (arg1 == "repodir") {
             config.repoDir = arg2;
-        else if (arg1 == "sslcertificate")
+            config.poolDir = arg2 + "/" + BOXIT_POOL_REPO;
+        }
+        else if (arg1 == "sslcertificate") {
             config.sslCertificate = arg2;
-        else if (arg1 == "sslkey")
+        }
+        else if (arg1 == "sslkey") {
             config.sslKey = arg2;
-        else if (arg1 == "mailinglistemail")
+        }
+        else if (arg1 == "mailinglistemail") {
             config.mailingListEMail = arg2;
+        }
     }
     file.close();
 
     if (config.salt.isEmpty() || config.repoDir.isEmpty() || config.sslCertificate.isEmpty() || config.sslKey.isEmpty() || config.mailingListEMail.isEmpty())
         return false;
-
-    return true;
-}
-
-
-
-
-//###
-//### Private
-//###
-
-
-
-bool Global::movePackage(QString src, QString dest, QString &error) {
-    if (QFile::exists(dest) && !QFile::remove(dest)) {
-        error = "error: failed to remove '" + dest + "'!";
-        return false;
-    }
-    else if (!QDir().rename(src, dest)) {
-        error = "error: failed to move file '" + src + "'!";
-        return false;
-    }
 
     return true;
 }

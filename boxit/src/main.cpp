@@ -82,11 +82,10 @@ QByteArray sha1CheckSum(QString filePath);
 
 // Socket operations
 bool connectAndLoginToHost(QString host);
-bool lockRepo(QString repository, QString architecture);
-bool unlockRepo();
-bool printServerMessages(QString repository, QString architecture, bool allowStop);
+bool lockPool(QString repository, QString architecture);
+bool unlockPool();
+bool printServerMessages(bool allowStop);
 void printMessageHistory(QString history);
-bool getRepoTMPSyncState(bool &hasTMPSync, QString repository, QString architecture);
 bool getRepositoryState(QString &state, QString repository, QString architecture);
 bool getRemoteFiles(QStringList &remoteFiles, QString repository, QString architecture);
 bool getRemoteSignatures(QStringList &remoteSignatures, QString repository, QString architecture);
@@ -267,7 +266,7 @@ void interruptEditorProcess(int sig) {
 
 void interruptProcessOutput(int sig) {
     signal(sig, SIG_DFL);
-    boxitSocket.sendData(MSG_STOP_REPO_MESSAGES);
+    boxitSocket.sendData(MSG_STOP_POOL_MESSAGES);
 }
 
 
@@ -679,9 +678,15 @@ bool checkForSignatures() {
 
 
 bool connectAndLoginToHost(QString host) {
+    cout << "\r" << flush;
+    cout << QString("Connecting to host %1...").arg(host.trimmed()).toAscii().data() << flush;
+
     // Connect to host
     if (!boxitSocket.connectToHost(host))
         return false; // Error messages are printed by the boxit socket class
+
+    cout << "\r" << flush;
+    cout << QString("Connected to host %1     ").arg(host.trimmed()).toAscii().data() << endl;
 
 
     // First send our fuchs version to the server
@@ -722,24 +727,25 @@ error:
 
 
 
-bool lockRepo(QString repository, QString architecture) {
+bool lockPool(QString repository, QString architecture) {
     // Lock repository
     boxitSocket.sendData(MSG_LOCK, QByteArray(QString(repository + BOXIT_SPLIT_CHAR + architecture).toAscii()));
     boxitSocket.readData(msgID);
-    if (msgID == MSG_ERROR_REPO_LOCK_ONLY_ONCE) {
-        cerr << "error: one repository is already locked!" << endl;
-        return false;
-    }
-    else if (msgID == MSG_ERROR_REPO_ALREADY_LOCKED) {
-        cerr << "error: repository is in use!" << endl;
+
+    if (msgID == MSG_ERROR_POOL_ALREADY_LOCKED) {
+        cerr << "error: pool is in use!" << endl;
         return false;
     }
     else if (msgID == MSG_ERROR_NOT_EXIST) {
         cerr << "error: repository does not exist!" << endl;
         return false;
     }
+    else if (msgID == MSG_ERROR_IS_BUSY) {
+        cerr << "error: repository is busy!" << endl;
+        return false;
+    }
     else if (msgID != MSG_SUCCESS) {
-        cerr << "error: failed to lock repository!" << endl;
+        cerr << "error: failed to lock pool!" << endl;
         return false;
     }
 
@@ -748,12 +754,12 @@ bool lockRepo(QString repository, QString architecture) {
 
 
 
-bool unlockRepo() {
-    // Unlock repository
+bool unlockPool() {
+    // Unlock pool
     boxitSocket.sendData(MSG_UNLOCK);
     boxitSocket.readData(msgID);
     if (msgID != MSG_SUCCESS) {
-        cerr << "error: failed to unlock repository!" << endl;
+        cerr << "error: failed to unlock pool!" << endl;
         return false;
     }
 
@@ -762,22 +768,12 @@ bool unlockRepo() {
 
 
 
-bool printServerMessages(QString repository, QString architecture, bool allowStop) {
-    boxitSocket.sendData(MSG_GET_REPO_MESSAGES, QByteArray(QString(repository + BOXIT_SPLIT_CHAR + architecture).toAscii()));
+bool printServerMessages(bool allowStop) {
+    boxitSocket.sendData(MSG_GET_POOL_MESSAGES);
     boxitSocket.readData(msgID, data);
 
-    if (msgID == MSG_ERROR_NOT_EXIST) {
-        cerr << "error: repository does not exist!" << endl;
-        return false;
-    }
-    else if (msgID == MSG_ERROR_NOT_BUSY) {
-        // Print message history
-        printMessageHistory(QString(data));
-        cout<< "> repository has no running process!" << endl;
-        return false;
-    }
-    else if (msgID != MSG_SUCCESS) {
-        cerr << "error: failed to request repository process messages!" << endl;
+    if (msgID != MSG_SUCCESS) {
+        cerr << "error: failed to request pool process messages!" << endl;
         return false;
     }
 
@@ -794,6 +790,23 @@ bool printServerMessages(QString repository, QString architecture, bool allowSto
 
     // Print message history
     printMessageHistory(QString(data));
+
+    // Check if process is already finished
+    boxitSocket.sendData(MSG_REQUEST_PROCESS_STATE);
+    boxitSocket.readData(msgID);
+
+    if (msgID == MSG_PROCESS_FINISHED) {
+        cout << "> finished process!" << endl;
+        return true;
+    }
+    else if (msgID == MSG_PROCESS_FAILED) {
+        cout << "> process failed!" << endl;
+        return false;
+    }
+    else if (msgID != MSG_PROCESS_RUNNING) {
+        cout << "> server answered with an unkown command!" << endl;
+        return false;
+    }
 
 
     // Get messages...
@@ -862,31 +875,6 @@ void printMessageHistory(QString history) {
     else {
         cout << history.toAscii().data() << endl;
     }
-}
-
-
-
-bool getRepoTMPSyncState(bool &hasTMPSync, QString repository, QString architecture) {
-    // Check if a temporary sync is existing for this repo
-    boxitSocket.sendData(MSG_REPO_HAS_TMP_SYNC, QByteArray(QString(repository + BOXIT_SPLIT_CHAR + architecture).toAscii()));
-    boxitSocket.readData(msgID, data);
-
-    if (msgID == MSG_ERROR_NOT_EXIST) {
-        cerr << "error: repository does not exist!" << endl;
-        return false;
-    }
-    else if (msgID == MSG_ERROR_IS_BUSY) {
-        cerr << "error: repository is busy!" << endl;
-        return false;
-    }
-    else if (msgID != MSG_YES && msgID != MSG_NO) {
-        cerr << "error: failed to determind repository synchronization state!" << endl;
-        return false;
-    }
-
-    hasTMPSync = (msgID == MSG_YES);
-
-    return true;
 }
 
 
@@ -1209,26 +1197,9 @@ bool performPush() {
     }
 
 
-
-
-    // Check if a temporary sync is existing for this repo
-    bool hasTMPSync;
-    if (!getRepoTMPSyncState(hasTMPSync, config.repository, config.architecture))
-       return false; // Error messages are printed by the function
-
-    if (hasTMPSync) {
-        QString answer = getInput("Repository has a temporary synchronization! You should commit this first! Do you really want to discard this files to continue? [y/N] ", false, false).toLower().trimmed();
-        if (answer.isEmpty() || answer != "y") {
-            cerr << "abording..." << endl;
-            return false;
-        }
-    }
-
-
     // Lock repository
-    if (!lockRepo(config.repository, config.architecture))
+    if (!lockPool(config.repository, config.architecture))
         return false; // Error messages are printed by the function
-
 
 
     // Send all packages to remove
@@ -1260,11 +1231,11 @@ bool performPush() {
     }
 
     // Unlock repository
-    unlockRepo(); // Error messages are printed by the function -> not fatal
+    unlockPool(); // Error messages are printed by the function -> not fatal
 
 
     // Read process messages
-    if (!printServerMessages(config.repository, config.architecture, false))
+    if (!printServerMessages(false))
         return false; // Error handling is done by the function
 
 
@@ -1317,10 +1288,25 @@ bool uploadData(QString path) {
 
     QString uploadFileName = path.split("/", QString::SkipEmptyParts).last();
 
-    boxitSocket.sendData(MSG_FILE_UPLOAD, QByteArray(uploadFileName.toAscii()));
+
+    // Tell the server the file checksum
+    boxitSocket.sendData(MSG_FILE_CHECKSUM, sha1CheckSum(file.fileName()));
     boxitSocket.readData(msgID);
 
     if (msgID != MSG_SUCCESS) {
+        cerr << "\nerror: server failed to obtain file checksum!" << endl;
+        return false;
+    }
+
+
+    boxitSocket.sendData(MSG_FILE_UPLOAD, QByteArray(uploadFileName.toAscii()));
+    boxitSocket.readData(msgID);
+
+    if (msgID == MSG_FILE_ALREADY_EXISTS) {
+        cout << "'" << uploadFileName.toAscii().data() << "' already exists (100%)" << endl;
+        return true;
+    }
+    else if (msgID != MSG_SUCCESS) {
         cerr << "error: server failed to obtain file '" << path.toAscii().data() << "'" << endl;
         return false;
     }
@@ -1338,7 +1324,7 @@ bool uploadData(QString path) {
     file.close();
 
     // Tell the server that we finished...
-    boxitSocket.sendData(MSG_DATA_UPLOAD_FINISH, sha1CheckSum(file.fileName()));
+    boxitSocket.sendData(MSG_DATA_UPLOAD_FINISH);
     boxitSocket.readData(msgID);
 
     if (msgID == MSG_ERROR_CHECKSUM_WRONG) {
@@ -1426,16 +1412,15 @@ bool runShell() {
             cout << "  help\t\t\tshow help" << endl;
             cout << "  passwd\t\tchange password" << endl;
             cout << "  list\t\t\tshow available repositories" << endl;
-            cout << "  rebuilddb\t\trebuild repository database" << endl;
             cout << "  sync [package] [...]\tsynchronise repository" << endl;
+            cout << "  merge\t\t\tmerge repository with another one" << endl;
             cout << "  addrepo\t\tadd repository" << endl;
-            cout << "  rmrepo\t\tremove repository" << endl;
-            cout << "  copyrepo\t\tcopy repository" << endl;
-            cout << "  moverepo\t\tmove repository" << endl;
             cout << "  syncurl\t\tshow and change repository synchronization url" << endl;
             cout << "  exedit\t\tchange repository exclude file" << endl;
-            cout << "  kill\t\t\tkill repository process" << endl;
-            cout << "  pshow\t\t\tshow repository process output" << endl;
+            cout << "  kill\t\t\tkill pool process" << endl;
+            cout << "  pshow\t\t\tshow pool process output" << endl;
+            cout << "  state\t\t\tshow pool process state" << endl;
+            cout << "  cmp\t\t\tcompare repositories" << endl;
             cout << endl;
         }
         else if (input.at(0) == "passwd") {
@@ -1474,6 +1459,25 @@ bool runShell() {
 
             cout << "successfully changed password!" << endl;
         }
+        else if (input.at(0) == "state") {
+            boxitSocket.sendData(MSG_POOL_STATE);
+            boxitSocket.readData(msgID, data);
+
+            QStringList split = QString(data).split(BOXIT_SPLIT_CHAR, QString::SkipEmptyParts);
+
+            if (split.size() < 3) {
+                cout << QString(data).toAscii().data() << endl;
+            }
+            else {
+                consoleFill('-', 79);
+                cout << setw(26) << "JOB" << setw(26) << "STATE" << setw(26) << "BY USER" << endl;
+                consoleFill('-', 79);
+
+                cout << setw(26) << split.at(0).toAscii().data();
+                cout << setw(26) << split.at(1).toAscii().data();
+                cout << setw(26) << split.at(2).toAscii().data() << endl << endl;
+            }
+        }
         else if (input.at(0) == "list") {
             boxitSocket.sendData(MSG_REQUEST_LIST);
             boxitSocket.readData(msgID, data);
@@ -1485,21 +1489,19 @@ bool runShell() {
                 if (firstRepo) {
                     cout << endl;
                     consoleFill('-', 79);
-                    cout << setw(30) << "REPO" << setw(10) << "ARCH" << setw(19) << "JOB" << setw(19) << "STATE" << endl;
+                    cout << setw(40) << "REPO" << setw(20) << "ARCH" << endl;
                     consoleFill('-', 79);
                     firstRepo = false;
                 }
 
                 split = QString(data).split(BOXIT_SPLIT_CHAR, QString::SkipEmptyParts);
 
-                if (split.size() < 4) {
+                if (split.size() < 2) {
                     cout << QString(data).toAscii().data() << endl;
                 }
                 else {
-                    cout << setw(30) << split.at(0).toAscii().data();
-                    cout << setw(10) << split.at(1).toAscii().data();
-                    cout << setw(19) << split.at(2).toAscii().data();
-                    cout << setw(19) << split.at(3).toAscii().data() << endl;
+                    cout << setw(40) << split.at(0).toAscii().data();
+                    cout << setw(20) << split.at(1).toAscii().data() << endl;
                 }
 
 
@@ -1513,33 +1515,114 @@ bool runShell() {
                 continue;
             }
         }
-        else if (input.at(0) == "rebuilddb") {
-            QString name = getInput("repository name: ", false, false).trimmed();
-            QString architecture = getInput("repository architecture: ", false, false).trimmed();
+        else if (input.at(0) == "cmp") {
+            QString firstName = getInput("1. repository name: ", false, false).trimmed();
+            QString firstArchitecture = getInput("1. repository architectures: ", false, false).trimmed();
+            QString secondName = getInput("2. repository name: ", false, false).trimmed();
+            QString secondArchitecture = getInput("2. repository architectures: ", false, false).trimmed();
 
             // Perform basic checks
-            if (!basicInputCheck(name, architecture))
+            if (!basicInputCheck(firstName, firstArchitecture) || !basicInputCheck(secondName, secondArchitecture))
                 continue; // Error messages are printed by the function
 
+            QStringList firstPackages, secondPackages;
+
+            if (!getRemotePackages(firstPackages, firstName, firstArchitecture) || !getRemotePackages(secondPackages, secondName, secondArchitecture))
+                continue; // Error messages are printed by the function
+
+            firstPackages.removeDuplicates();
+            firstPackages.sort();
+            secondPackages.removeDuplicates();
+            secondPackages.sort();
+
+            cout << endl;
+            consoleFill('-', 79);
+            cout << setw(30) << "PACKAGE" << setw(24) << "VERSION 1. REPO" << setw(24) << "VERSION 2. REPO" << endl;
+            consoleFill('-', 79);
+
+
+            for (int i = 0; i < firstPackages.size(); ++i) {
+                QString package = firstPackages.at(i);
+                QString name = getNameofPKG(package);
+
+                cout << setw(30) << name.toAscii().data() << setw(24) << getVersionofPKG(package).toAscii().data();
+
+                for (int i = 0; i < secondPackages.size(); ++i) {
+                    QString package = secondPackages.at(i);
+                    QString secondName = getNameofPKG(package);
+
+                    if (name != secondName)
+                        continue;
+
+                    cout << setw(24) << getVersionofPKG(package).toAscii().data();
+                    break;
+                }
+
+                cout << endl;
+            }
+
+            for (int i = 0; i < secondPackages.size(); ++i) {
+                QString package = secondPackages.at(i);
+                QString name = getNameofPKG(package);
+                bool found = false;
+
+                for (int i = 0; i < firstPackages.size(); ++i) {
+                    QString package = firstPackages.at(i);
+                    QString firstName = getNameofPKG(package);
+
+                    if (firstName == name) {
+                        found = true;
+                        break;
+                    }
+                }
+
+                if (!found)
+                    cout << setw(30) << name.toAscii().data() << setw(48) << getVersionofPKG(package).toAscii().data() << endl;
+            }
+
+            cout << endl;
+        }
+        else if (input.at(0) == "merge") {
+            QString srcName = getInput("source repository name: ", false, false).trimmed();
+            QString destName = getInput("destination repository name: ", false, false).trimmed();
+            QString architecture = getInput("repository architectures: ", false, false).trimmed();
+
+            // Perform basic checks
+            if (!basicInputCheck(srcName, architecture) || !basicInputCheck(destName, architecture))
+                continue; // Error messages are printed by the function
+
+            QString answer = getInput("Continue merging? [Y/n] ", false, false).toLower().trimmed();
+            if (!answer.isEmpty() && answer != "y") {
+                cerr << "abording..." << endl;
+                continue;
+            }
 
             // Send data
-            boxitSocket.sendData(MSG_REPO_DB_REBUILD, QByteArray(QString(name + BOXIT_SPLIT_CHAR + architecture).toAscii()));
+            boxitSocket.sendData(MSG_REPO_MERGE, QByteArray(QString(srcName + BOXIT_SPLIT_CHAR + architecture + BOXIT_SPLIT_CHAR + destName).toAscii()));
             boxitSocket.readData(msgID);
 
-            if (msgID == MSG_ERROR_NOT_EXIST) {
-                cerr << "error: repository does not exist!" << endl;
+            if (msgID == MSG_ERROR_POOL_ALREADY_LOCKED) {
+                cerr << "error: pool is in use!" << endl;
+                continue;
+            }
+            else if (msgID == MSG_ERROR_NOT_EXIST) {
+                cerr << "error: one repository does not exist!" << endl;
                 continue;
             }
             else if (msgID == MSG_ERROR_IS_BUSY) {
-                cerr << "error: repository is busy!" << endl;
+                cerr << "error: one repository is busy!" << endl;
                 continue;
             }
             else if (msgID != MSG_SUCCESS) {
-                cerr << "error: failed to start rebuild database process!" << endl;
+                cerr << "error: failed to start merge process!" << endl;
                 continue;
             }
 
-            cout << "Started repository database rebuild process..." << endl;
+            cout << "Started repository merge process..." << endl;
+
+            // Read process messages
+            if (!printServerMessages(true))
+                continue; // Error handling is done by the function
         }
         else if (input.at(0) == "sync") {
             QString name = getInput("repository name: ", false, false).trimmed();
@@ -1573,24 +1656,15 @@ bool runShell() {
             }
 
 
-
-            // Check if a temporary sync is existing for this repo
-            bool hasTMPSync, discard = true;
-            if (!getRepoTMPSyncState(hasTMPSync, name, architecture))
-               continue; // Error messages are printed by the function
-
-            if (hasTMPSync) {
-                answer = getInput("Repository has a temporary synchronization! Do you want to discard this or sync on top of it? Discard? [y/N] ", false, false).toLower().trimmed();
-                if (answer.isEmpty() || answer != "y")
-                    discard = false;
-            }
-
-
             // Send data
-            boxitSocket.sendData(MSG_REPO_SYNC, QByteArray(QString(name + BOXIT_SPLIT_CHAR + architecture + BOXIT_SPLIT_CHAR  + QString::number(discard) + BOXIT_SPLIT_CHAR + customSyncPackages).toAscii()));
+            boxitSocket.sendData(MSG_REPO_SYNC, QByteArray(QString(name + BOXIT_SPLIT_CHAR + architecture + BOXIT_SPLIT_CHAR + customSyncPackages).toAscii()));
             boxitSocket.readData(msgID);
 
-            if (msgID == MSG_ERROR_NOT_EXIST) {
+            if (msgID == MSG_ERROR_POOL_ALREADY_LOCKED) {
+                cerr << "error: pool is in use!" << endl;
+                continue;
+            }
+            else if (msgID == MSG_ERROR_NOT_EXIST) {
                 cerr << "error: repository does not exist!" << endl;
                 continue;
             }
@@ -1610,51 +1684,33 @@ bool runShell() {
             cout << "Started repository synchronization process..." << endl;
 
             // Read process messages
-            if (!printServerMessages(name, architecture, true))
+            if (!printServerMessages(true))
                 continue; // Error handling is done by the function
         }
         else if (input.at(0) == "kill") {
-            QString name = getInput("repository name: ", false, false).trimmed();
-            QString architecture = getInput("repository architecture: ", false, false).trimmed();
-
-            // Perform basic checks
-            if (!basicInputCheck(name, architecture))
-                continue; // Error messages are printed by the function
-
-            QString answer = getInput("Do you really want to kill the repository process? [y/N] ", false, false).toLower().trimmed();
+            QString answer = getInput("Do you really want to kill the pool process? [y/N] ", false, false).toLower().trimmed();
             if (answer.isEmpty() || answer != "y") {
                 cerr << "abording..." << endl;
                 continue;
             }
 
             // Send data
-            boxitSocket.sendData(MSG_KILL, QByteArray(QString(name + BOXIT_SPLIT_CHAR + architecture).toAscii()));
+            boxitSocket.sendData(MSG_KILL);
             boxitSocket.readData(msgID);
 
-            if (msgID == MSG_ERROR_NOT_EXIST) {
-                cerr << "error: repository does not exist!" << endl;
-                continue;
-            }
-            else if (msgID == MSG_ERROR_NOT_BUSY) {
-                cerr << "error: repository process is not running!" << endl;
+            if (msgID == MSG_ERROR_NOT_BUSY) {
+                cerr << "error: pool process is not running!" << endl;
                 continue;
             }
             else if (msgID != MSG_SUCCESS) {
-                cerr << "error: failed to kill repository process! Is it locked by an user?" << endl;
+                cerr << "error: failed to kill pool process!" << endl;
                 continue;
             }
 
             cout << "Successfully killed repository process!" << endl;
         }
         else if (input.at(0) == "pshow") {
-            QString name = getInput("repository name: ", false, false).trimmed();
-            QString architecture = getInput("repository architecture: ", false, false).trimmed();
-
-            // Perform basic checks
-            if (!basicInputCheck(name, architecture))
-                continue; // Error messages are printed by the function
-
-            if (!printServerMessages(name, architecture, true))
+            if (!printServerMessages(true))
                 continue; // Error messages are printed by the function
         }
         else if (input.at(0) == "addrepo") {
@@ -1720,121 +1776,6 @@ bool runShell() {
 
 
             cout << "Successfully added new repository!" << endl;
-        }
-        else if (input.at(0) == "rmrepo") {
-            QString name = getInput("repository name: ", false, false).trimmed();
-            QString architecture = getInput("repository architecture: ", false, false).trimmed();
-
-            // Perform basic checks
-            if (!basicInputCheck(name, architecture))
-                continue; // Error messages are printed by the function
-
-            // Question
-            QString answer = getInput(QString("Do you really want to delete repository '%1 %2'? [y/N] ").arg(name, architecture), false, false).toLower().trimmed();
-            if (answer.isEmpty() || answer != "y") {
-                cerr << "abording..." << endl;
-                continue;
-            }
-
-
-            // Send data
-            boxitSocket.sendData(MSG_REPO_REMOVE, QByteArray(QString(name + BOXIT_SPLIT_CHAR + architecture).toAscii()));
-            boxitSocket.readData(msgID);
-
-            if (msgID == MSG_ERROR_NOT_EXIST) {
-                cerr << "error: repository does not exist!" << endl;
-                continue;
-            }
-            else if (msgID == MSG_ERROR_IS_BUSY) {
-                cerr << "error: repository is busy!" << endl;
-                continue;
-            }
-            else if (msgID != MSG_SUCCESS) {
-                cerr << "error: failed to remove repository!" << endl;
-                continue;
-            }
-
-            cout << "Repository deletion started!" << endl;
-        }
-        else if (input.at(0) == "copyrepo") {
-            QString name = getInput("source repository name: ", false, false).trimmed();
-            QString architecture = getInput("source repository architecture: ", false, false).trimmed();
-            QString destName = getInput("destination repository name: ", false, false).trimmed();
-
-            // Perform basic checks
-            if (!basicInputCheck(name, architecture))
-                continue; // Error messages are printed by the function
-
-            // Question
-            QString answer = getInput(QString("Do you really want to copy repository '%1 %2' to '%3 %2'? [y/N] ").arg(name, architecture, destName), false, false).toLower().trimmed();
-            if (answer.isEmpty() || answer != "y") {
-                cerr << "abording..." << endl;
-                continue;
-            }
-
-
-            // Send data
-            boxitSocket.sendData(MSG_REPO_COPY, QByteArray(QString(name + BOXIT_SPLIT_CHAR + architecture + BOXIT_SPLIT_CHAR + destName).toAscii()));
-            boxitSocket.readData(msgID);
-
-            if (msgID == MSG_ERROR_NOT_EXIST) {
-                cerr << "error: repository does not exist!" << endl;
-                continue;
-            }
-            else if (msgID == MSG_ERROR_IS_BUSY) {
-                cerr << "error: repository is busy!" << endl;
-                continue;
-            }
-            else if (msgID == MSG_ERROR_ALREADY_EXIST) {
-                cerr << "error: destination repository already exists!" << endl;
-                continue;
-            }
-            else if (msgID != MSG_SUCCESS) {
-                cerr << "error: failed to copy repository!" << endl;
-                continue;
-            }
-
-            cout << "Repository copy started!" << endl;
-        }
-        else if (input.at(0) == "moverepo") {
-            QString name = getInput("source repository name: ", false, false).trimmed();
-            QString architecture = getInput("source repository architecture: ", false, false).trimmed();
-            QString destName = getInput("destination repository name: ", false, false).trimmed();
-
-            // Perform basic checks
-            if (!basicInputCheck(name, architecture))
-                continue; // Error messages are printed by the function
-
-            // Question
-            QString answer = getInput(QString("Do you really want to move repository '%1 %2' to '%3 %2'? [y/N] ").arg(name, architecture, destName), false, false).toLower().trimmed();
-            if (answer.isEmpty() || answer != "y") {
-                cerr << "abording..." << endl;
-                continue;
-            }
-
-
-            // Send data
-            boxitSocket.sendData(MSG_REPO_MOVE, QByteArray(QString(name + BOXIT_SPLIT_CHAR + architecture + BOXIT_SPLIT_CHAR + destName).toAscii()));
-            boxitSocket.readData(msgID);
-
-            if (msgID == MSG_ERROR_NOT_EXIST) {
-                cerr << "error: repository does not exist!" << endl;
-                continue;
-            }
-            else if (msgID == MSG_ERROR_IS_BUSY) {
-                cerr << "error: repository is busy!" << endl;
-                continue;
-            }
-            else if (msgID == MSG_ERROR_ALREADY_EXIST) {
-                cerr << "error: destination repository already exists!" << endl;
-                continue;
-            }
-            else if (msgID != MSG_SUCCESS) {
-                cerr << "error: failed to move repository!" << endl;
-                continue;
-            }
-
-            cout << "Repository move started!" << endl;
         }
         else if (input.at(0) == "syncurl") {
             QString name = getInput("repository name: ", false, false).trimmed();

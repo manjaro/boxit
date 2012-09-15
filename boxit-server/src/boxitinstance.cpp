@@ -23,16 +23,17 @@
 
 BoxitInstance::BoxitInstance()
 {
+    sendMessages = false;
+    poolLocked = false;
     loginCount = 0;
     timeoutCount = 0;
-    lockedRepo = NULL;
     timeOutTimer.setInterval(5000);
 
     // Connect signals and slots
     connect(this, SIGNAL(readData(quint16,QByteArray))  ,   this, SLOT(read_Data(quint16,QByteArray)));
     connect(&timeOutTimer, SIGNAL(timeout())    ,   this, SLOT(timeOutDestroy()));
-    connect(&RepoDB::self, SIGNAL(message(QString,QString,QString)) ,   this, SLOT(sendMessage(QString,QString,QString)));
-    connect(&RepoDB::self, SIGNAL(finished(QString,QString,bool))   ,   this, SLOT(sendFinished(QString,QString,bool)));
+    connect(&Pool::self, SIGNAL(message(QString)) ,   this, SLOT(sendMessage(QString)));
+    connect(&Pool::self, SIGNAL(finished(bool))   ,   this, SLOT(sendFinished(bool)));
 
     timeOutTimer.start();
 }
@@ -47,9 +48,9 @@ BoxitInstance::~BoxitInstance() {
         file.setFileName("");
     }
 
-    if (lockedRepo != NULL) {
-        lockedRepo->unlock();
-        lockedRepo = NULL;
+    if (poolLocked) {
+        poolLocked = false;
+        Pool::unlock();
     }
 }
 
@@ -61,8 +62,8 @@ BoxitInstance::~BoxitInstance() {
 
 
 
-void BoxitInstance::sendFinished(QString repository, QString architecture, bool success) {
-    if (messageRepoName.isEmpty() || messageRepoName != repository || messageRepoArchitecture != architecture)
+void BoxitInstance::sendFinished(bool success) {
+    if (!sendMessages)
         return;
 
     if (success)
@@ -73,8 +74,8 @@ void BoxitInstance::sendFinished(QString repository, QString architecture, bool 
 
 
 
-void BoxitInstance::sendMessage(QString repository, QString architecture, QString msg) {
-    if (messageRepoName.isEmpty() || messageRepoName != repository || messageRepoArchitecture != architecture)
+void BoxitInstance::sendMessage(QString msg) {
+    if (!sendMessages)
         return;
 
     sendData(MSG_MESSAGE, QByteArray(msg.toAscii()));
@@ -163,38 +164,32 @@ void BoxitInstance::read_Data(quint16 msgID, QByteArray data) {
     }
     case MSG_LOCK:
     {
-        QStringList request = QString(data).split(BOXIT_SPLIT_CHAR, QString::SkipEmptyParts);
+        if (Pool::isLocked()) {
+            sendData(MSG_ERROR_POOL_ALREADY_LOCKED);
+            break;
+        }
 
-        if (request.size() < 2) {
+        QStringList split;
+        if (!basicRepoChecks(data, split))
+            break;
+
+        if (!RepoDB::lockPool(user.getUsername(), split.at(0), split.at(1))) {
             sendData(MSG_ERROR);
             break;
         }
-        else if (lockedRepo != NULL) {
-            sendData(MSG_ERROR_REPO_LOCK_ONLY_ONCE);
-            break;
-        }
-        else if (!RepoDB::repoExists(request.at(0), request.at(1))) {
-            sendData(MSG_ERROR_NOT_EXIST);
-            break;
-        }
 
-        lockedRepo = RepoDB::lockRepo(request.at(0), request.at(1), user.getUsername());
-        if (lockedRepo == NULL) {
-            sendData(MSG_ERROR_REPO_ALREADY_LOCKED);
-            break;
-        }
-
+        poolLocked = true;
         sendData(MSG_SUCCESS);
         break;
     }
     case MSG_COMMIT:
     {
-        if (lockedRepo == NULL) {
-            sendData(MSG_ERROR_REPO_NOT_LOCKED);
+        if (!poolLocked) {
+            sendData(MSG_ERROR_POOL_NOT_LOCKED);
             break;
         }
 
-        if (!lockedRepo->thread.start(user.getUsername(), RepoThread::JOB_COMMIT))
+        if (!Pool::commit())
             sendData(MSG_ERROR);
         else
             sendData(MSG_SUCCESS);
@@ -203,20 +198,35 @@ void BoxitInstance::read_Data(quint16 msgID, QByteArray data) {
     }
     case MSG_REMOVE_PACKAGE:
     {
-        if (lockedRepo == NULL) {
-            sendData(MSG_ERROR_REPO_NOT_LOCKED);
+        if (!poolLocked) {
+            sendData(MSG_ERROR_POOL_NOT_LOCKED);
             break;
         }
 
-        lockedRepo->removeFile(QString(data));
+        Pool::removeFile(QString(data).split("/", QString::SkipEmptyParts).last());
 
+        sendData(MSG_SUCCESS);
+        break;
+    }
+    case MSG_FILE_CHECKSUM:
+    {
+        if (data.isEmpty()) {
+            sendData(MSG_ERROR);
+            break;
+        }
+
+        fileCheckSum = data;
         sendData(MSG_SUCCESS);
         break;
     }
     case MSG_FILE_UPLOAD:
     {
-        if (lockedRepo == NULL) {
-            sendData(MSG_ERROR_REPO_NOT_LOCKED);
+        if (!poolLocked) {
+            sendData(MSG_ERROR_POOL_NOT_LOCKED);
+            break;
+        }
+        else if (fileCheckSum.isEmpty()) {
+            sendData(MSG_ERROR);
             break;
         }
 
@@ -227,10 +237,19 @@ void BoxitInstance::read_Data(quint16 msgID, QByteArray data) {
             file.setFileName("");
         }
 
-        file.setFileName(lockedRepo->getWorkPath() + "/" + QString(data).split("/", QString::SkipEmptyParts).last());
+        file.setFileName(Global::getConfig().poolDir + "/" + QString(data).split("/", QString::SkipEmptyParts).last());
 
-        if (file.exists())
-            file.remove();
+        // Check if file exists and compare the checksums. Remove if different...
+        if (file.exists()) {
+            if (fileCheckSum != sha1CheckSum(file.fileName())) {
+                file.remove();
+            }
+            else {
+                Pool::addFile(file.fileName().split("/", QString::SkipEmptyParts).last());
+                sendData(MSG_FILE_ALREADY_EXISTS);
+                break;
+            }
+        }
 
         if (!file.open(QIODevice::WriteOnly)) {
             sendData(MSG_ERROR);
@@ -258,34 +277,29 @@ void BoxitInstance::read_Data(quint16 msgID, QByteArray data) {
 
         file.close();
 
-        if (!data.isEmpty() && data != sha1CheckSum(file.fileName())) {
+        if (fileCheckSum != sha1CheckSum(file.fileName())) {
+            fileCheckSum.clear();
             file.remove();
             file.setFileName("");
             sendData(MSG_ERROR_CHECKSUM_WRONG);
             break;
         }
 
-        if (lockedRepo == NULL) {
-            sendData(MSG_ERROR);
-            break;
-        }
-
-
+        Pool::addFile(file.fileName().split("/", QString::SkipEmptyParts).last());
+        fileCheckSum.clear();
         file.setFileName("");
         sendData(MSG_SUCCESS);
         break;
     }
     case MSG_UNLOCK:
     {
-        if (lockedRepo == NULL) {
-            sendData(MSG_ERROR_REPO_NOT_LOCKED);
+        if (!poolLocked) {
+            sendData(MSG_ERROR_POOL_NOT_LOCKED);
             break;
         }
 
-        lockedRepo->unlock();
-        lockedRepo = NULL;
+        Pool::unlock();
         sendData(MSG_SUCCESS);
-
         break;
     }
     //###
@@ -304,6 +318,22 @@ void BoxitInstance::read_Data(quint16 msgID, QByteArray data) {
         }
 
         sendData(MSG_SUCCESS, QByteArray(state.toAscii()));
+        break;
+    }
+    case MSG_POOL_STATE:
+    {
+        sendData(MSG_SUCCESS, QByteArray(QString(Pool::getJob() + BOXIT_SPLIT_CHAR + Pool::getState() + BOXIT_SPLIT_CHAR + Pool::getUsername()).toAscii()));
+        break;
+    }
+    case MSG_REQUEST_PROCESS_STATE:
+    {
+        if (Pool::isProcessRunning())
+            sendData(MSG_PROCESS_RUNNING);
+        else if (Pool::isProcessSuccess())
+            sendData(MSG_PROCESS_FINISHED);
+        else
+            sendData(MSG_PROCESS_FAILED);
+
         break;
     }
     case MSG_PACKAGE_LIST:
@@ -368,7 +398,7 @@ void BoxitInstance::read_Data(quint16 msgID, QByteArray data) {
 
         for (int i = 0; i < infos.size(); ++i) {
             RepoDB::RepoInfo &info = infos[i];
-            sendData(MSG_LIST_REPO, QByteArray(QString(info.name + BOXIT_SPLIT_CHAR + info.architecture + BOXIT_SPLIT_CHAR + info.threadJob + BOXIT_SPLIT_CHAR + info.threadState).toAscii()));
+            sendData(MSG_LIST_REPO, QByteArray(QString(info.name + BOXIT_SPLIT_CHAR + info.architecture).toAscii()));
         }
 
         sendData(MSG_SUCCESS);
@@ -391,56 +421,6 @@ void BoxitInstance::read_Data(quint16 msgID, QByteArray data) {
             break;
         }
         else if (!RepoDB::createRepo(split.at(0), split.at(1))) {
-            sendData(MSG_ERROR);
-            break;
-        }
-
-        sendData(MSG_SUCCESS);
-        break;
-    }
-    case MSG_REPO_REMOVE:
-    {
-        QStringList split;
-        if (!basicRepoChecks(data, split))
-            break;
-
-        if (!RepoDB::removeRepo(user.getUsername(), split.at(0), split.at(1))) {
-            sendData(MSG_ERROR);
-            break;
-        }
-
-        sendData(MSG_SUCCESS);
-        break;
-    }
-    case MSG_REPO_COPY:
-    {
-        QStringList split;
-        if (!basicRepoChecks(data, split, 3))
-            break;
-
-        if (RepoDB::repoExists(split.at(2), split.at(1))) {
-            sendData(MSG_ERROR_ALREADY_EXIST);
-            break;
-        }
-        else if (!RepoDB::copyRepo(user.getUsername(), split.at(0), split.at(1), split.at(2))) {
-            sendData(MSG_ERROR);
-            break;
-        }
-
-        sendData(MSG_SUCCESS);
-        break;
-    }
-    case MSG_REPO_MOVE:
-    {
-        QStringList split;
-        if (!basicRepoChecks(data, split, 3))
-            break;
-
-        if (RepoDB::repoExists(split.at(2), split.at(1))) {
-            sendData(MSG_ERROR_ALREADY_EXIST);
-            break;
-        }
-        else if (!RepoDB::moveRepo(user.getUsername(), split.at(0), split.at(1), split.at(2))) {
             sendData(MSG_ERROR);
             break;
         }
@@ -477,13 +457,26 @@ void BoxitInstance::read_Data(quint16 msgID, QByteArray data) {
         sendData(MSG_SUCCESS);
         break;
     }
-    case MSG_REPO_DB_REBUILD:
+    case MSG_REPO_MERGE:
     {
         QStringList split;
-        if (!basicRepoChecks(data, split))
+        if (!basicRepoChecks(data, split, 3))
             break;
 
-        if (!RepoDB::repoRebuildDB(user.getUsername(), split.at(0), split.at(1))) {
+        if (!RepoDB::repoExists(split.at(2), split.at(1))) {
+            sendData(MSG_ERROR_NOT_EXIST);
+            break;
+        }
+        else if (RepoDB::repoIsBusy(split.at(2), split.at(1))) {
+            sendData(MSG_ERROR_IS_BUSY);
+            break;
+        }
+        else if (Pool::isLocked()) {
+            sendData(MSG_ERROR_POOL_ALREADY_LOCKED);
+            break;
+        }
+
+        if (!RepoDB::mergeRepos(user.getUsername(), split.at(0), split.at(2), split.at(1))) {
             sendData(MSG_ERROR);
             break;
         }
@@ -494,8 +487,13 @@ void BoxitInstance::read_Data(quint16 msgID, QByteArray data) {
     case MSG_REPO_SYNC:
     {
         QStringList split;
-        if (!basicRepoChecks(data, split, 3))
+        if (!basicRepoChecks(data, split))
             break;
+
+        if (Pool::isLocked()) {
+            sendData(MSG_ERROR_POOL_ALREADY_LOCKED);
+            break;
+        }
 
         QString syncURL, customSyncPackages;
         if (!RepoDB::getRepoSyncURL(split.at(0), split.at(1), syncURL)) {
@@ -508,35 +506,15 @@ void BoxitInstance::read_Data(quint16 msgID, QByteArray data) {
             break;
         }
 
-        if (split.size() >= 4)
-            customSyncPackages = split.at(3);
+        if (split.size() >= 3)
+            customSyncPackages = split.at(2);
 
-        if (!RepoDB::repoSync(user.getUsername(), split.at(0), split.at(1), customSyncPackages, split.at(2).toInt())) {
+        if (!RepoDB::repoSync(user.getUsername(), split.at(0), split.at(1), customSyncPackages)) {
             sendData(MSG_ERROR);
             break;
         }
 
         sendData(MSG_SUCCESS);
-        break;
-    }
-    case MSG_REPO_HAS_TMP_SYNC:
-    {
-        QStringList split;
-        if (!basicRepoChecks(data, split))
-            break;
-
-        bool hasTMPSync;
-
-        if (!RepoDB::getRepoSyncInfo(split.at(0), split.at(1), hasTMPSync)) {
-            sendData(MSG_ERROR);
-            break;
-        }
-
-        if (hasTMPSync)
-            sendData(MSG_YES);
-        else
-            sendData(MSG_NO);
-
         break;
     }
     case MSG_GET_EXCLUDE_CONTENT:
@@ -576,21 +554,11 @@ void BoxitInstance::read_Data(quint16 msgID, QByteArray data) {
     }
     case MSG_KILL:
     {
-        QStringList split = QString(data).split(QString(BOXIT_SPLIT_CHAR), QString::SkipEmptyParts);
-
-        if (split.size() < 2) {
-            sendData(MSG_ERROR);
-            break;
-        }
-        else if (!RepoDB::repoExists(split.at(0), split.at(1))) {
-            sendData(MSG_ERROR_NOT_EXIST);
-            break;
-        }
-        else if (!RepoDB::repoIsBusy(split.at(0), split.at(1))) {
+        if (!Pool::isLocked()) {
             sendData(MSG_ERROR_NOT_BUSY);
             break;
         }
-        else if (!RepoDB::repoKillThread(split.at(0), split.at(1))) {
+        else if (!RepoDB::poolKillThread()) {
             sendData(MSG_ERROR);
             break;
         }
@@ -598,38 +566,15 @@ void BoxitInstance::read_Data(quint16 msgID, QByteArray data) {
         sendData(MSG_SUCCESS);
         break;
     }
-    case MSG_GET_REPO_MESSAGES:
+    case MSG_GET_POOL_MESSAGES:
     {
-        QStringList split = QString(data).split(QString(BOXIT_SPLIT_CHAR), QString::SkipEmptyParts);
-        QString messageHistory;
-
-        if (split.size() < 2) {
-            sendData(MSG_ERROR);
-            break;
-        }
-        else if (!RepoDB::repoExists(split.at(0), split.at(1))) {
-            sendData(MSG_ERROR_NOT_EXIST);
-            break;
-        }
-        else if (!RepoDB::repoMessageHistory(split.at(0), split.at(1), messageHistory)) {
-            sendData(MSG_ERROR);
-            break;
-        }
-        else if (!RepoDB::repoIsBusy(split.at(0), split.at(1))) {
-            sendData(MSG_ERROR_NOT_BUSY, QByteArray(messageHistory.toAscii()));
-            break;
-        }
-
-
-        sendData(MSG_SUCCESS, QByteArray(messageHistory.toAscii()));
-        messageRepoName = split.at(0);
-        messageRepoArchitecture = split.at(1);
+        sendData(MSG_SUCCESS, QByteArray(RepoDB::poolMessageHistory().toAscii()));
+        sendMessages = true;
         break;
     }
-    case MSG_STOP_REPO_MESSAGES:
+    case MSG_STOP_POOL_MESSAGES:
     {
-        messageRepoName.clear();
-        messageRepoArchitecture.clear();
+        sendMessages = false;
         sendData(MSG_PROCESS_BACKGROUND);
         break;
     }

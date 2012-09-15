@@ -18,40 +18,30 @@
  *  along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef GLOBAL_H
-#define GLOBAL_H
+#ifndef MAINTIMER_H
+#define MAINTIMER_H
 
-#include <QCoreApplication>
+#include <QThread>
 #include <QString>
-#include <QProcess>
-#include <QDir>
 #include <QFile>
-#include <QList>
-#include <QStringList>
 #include <QFileInfo>
-#include <QTextStream>
+#include <QDir>
+#include <QStringList>
+#include <QDateTime>
+#include "global.h"
 #include "const.h"
+#include "repo/repodb.h"
+#include "repo/pool.h"
 
 
-
-class Global
+class MainTimer : public QThread
 {
+    Q_OBJECT
 public:
-    struct Config {
-        QString salt, sslCertificate, sslKey, repoDir, poolDir, mailingListEMail;
-    };
-
-    static QString getNameofPKG(QString pkg);
-    static QString getVersionofPKG(QString pkg);
-    static bool sendMemoEMail(QString username, QString repository, QString architecture, QStringList addedFiles, QStringList removedFiles);
-    static bool sendEMail(QString subject, QString to, QString text);
-    static bool rmDir(QString path, bool onlyHidden = false, bool onlyContent = false);
-    static bool copyDir(QString src, QString dst, bool hidden = false);
-    static Config getConfig();
-    static bool readConfig();
-
-private:
-    static Config config;
+    explicit MainTimer(QObject *parent = 0);
+    
+    void run();
+    
 };
 
-#endif // GLOBAL_H
+#endif // MAINTIMER_H

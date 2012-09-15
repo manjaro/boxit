@@ -34,8 +34,8 @@
 #include "user/user.h"
 #include "user/userdbs.h"
 #include "repo/repo.h"
-#include "repo/repobase.h"
 #include "repo/repodb.h"
+#include "repo/pool.h"
 
 
 class BoxitInstance : public BoxitSocket
@@ -46,19 +46,19 @@ public:
     ~BoxitInstance();
 
 private:
-    QString messageRepoName, messageRepoArchitecture;
     int loginCount, timeoutCount;
+    bool sendMessages, poolLocked;
     User user;
     QTimer timeOutTimer;
-    Repo *lockedRepo;
     QFile file;
+    QByteArray fileCheckSum;
 
     bool basicRepoChecks(QByteArray &data, QStringList &split, int minimumLenght = 2);
     QByteArray sha1CheckSum(QString filePath);
 
 private slots:
-    void sendFinished(QString repository, QString architecture, bool success);
-    void sendMessage(QString repository, QString architecture, QString msg);
+    void sendFinished(bool success);
+    void sendMessage(QString msg);
     void read_Data(quint16 msgID, QByteArray data);
     void timeOutDestroy();
 

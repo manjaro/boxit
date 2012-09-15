@@ -36,7 +36,7 @@ Sync::~Sync() {
 
 
 
-bool Sync::synchronize(QString url, const QString repoName, const QString excludeFilePath, QStringList &allDBPackages, QStringList checkFilePaths, QStringList onlyFiles) {
+bool Sync::synchronize(QString url, const QString repoName, const QString excludeFilePath, QStringList &allDBPackages, QStringList &addedFiles, QStringList checkFilePaths, QStringList onlyFiles) {
     QStringList patterns;
     QList<Package> downloadPackages;
 
@@ -110,6 +110,8 @@ bool Sync::synchronize(QString url, const QString repoName, const QString exclud
         if (onlyFiles.isEmpty() && matchWithWildcard(package.packageName, patterns))
             continue;
 
+        addedFiles.append(package.fileName);
+
         // Check if file already exists
         if (fileAlreadyExist(package, checkFilePaths))
             continue;
@@ -126,17 +128,19 @@ bool Sync::synchronize(QString url, const QString repoName, const QString exclud
         Package package = downloadPackages.at(i);
 
         // Download file...
-        if (!downloadFile(url + package.fileName))
-            goto error; // Error messages are emited by the method...
+        if (package.downloadPackage) {
+            if (!downloadFile(url + package.fileName))
+                goto error; // Error messages are emited by the method...
 
-        // Check if package checksum is ok
-        if (CryptSHA256::sha256CheckSum(destPath + "/" + package.fileName) != package.sha256sum) {
-            emit error(QString("Package checksum doesn't match for package '%1'!").arg(package.fileName));
-            goto error;
+            // Check if package checksum is ok
+            if (CryptSHA256::sha256CheckSum(destPath + "/" + package.fileName) != package.sha256sum) {
+                emit error(QString("Package checksum doesn't match for package '%1'!").arg(package.fileName));
+                goto error;
+            }
         }
 
         // Download signature file...
-        if (!downloadFile(url + package.fileName + BOXIT_SIGNATURE_ENDING))
+        if (package.downloadSignature && !downloadFile(url + package.fileName + BOXIT_SIGNATURE_ENDING))
             // Error isn't fatal
             emit error(QString("warning: package '%1' doesn't has a signature!").arg(package.fileName));
     }
@@ -254,19 +258,22 @@ bool Sync::fillPackagesList(const QString repoName) {
 
 
 
-bool Sync::fileAlreadyExist(const Package &package, const QStringList &checkFilePaths) {
+bool Sync::fileAlreadyExist(Package &package, const QStringList &checkFilePaths) {
+    package.downloadPackage = true;
+    package.downloadSignature = true;
+
     // Check if file already exists
     for (int i = 0; i < checkFilePaths.size(); ++i) {
         QString path = checkFilePaths.at(i) + "/" + package.fileName;
 
-        if (!QFile::exists(path))
-            continue;
+        if (QFile::exists(path) && CryptSHA256::sha256CheckSum(path) == package.sha256sum)
+            package.downloadPackage = false;
 
-        if (CryptSHA256::sha256CheckSum(path) == package.sha256sum)
-            return true; // File already exist
+        if (QFile::exists(path + BOXIT_SIGNATURE_ENDING))
+            package.downloadSignature = false;
     }
 
-    return false;
+    return (!package.downloadPackage && !package.downloadSignature);
 }
 
 

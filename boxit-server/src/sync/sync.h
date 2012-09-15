@@ -45,7 +45,7 @@ public:
     explicit Sync(const QString destPath, QObject *parent = 0);
     ~Sync();
 
-    bool synchronize(QString url, const QString repoName, const QString excludeFilePath, QStringList &allDBPackages, QStringList checkFilePaths = QStringList(), QStringList onlyFiles = QStringList());
+    bool synchronize(QString url, const QString repoName, const QString excludeFilePath, QStringList &allDBPackages, QStringList &addedFiles, QStringList checkFilePaths = QStringList(), QStringList onlyFiles = QStringList());
 
 signals:
     void error(QString errorStr);
@@ -54,6 +54,7 @@ signals:
 private:
     struct Package {
         QString packageName, fileName, sha256sum;
+        bool downloadSignature, downloadPackage;
     };
 
     const QString destPath;
@@ -63,7 +64,7 @@ private:
 
     bool downloadFile(QString url);
     bool fillPackagesList(const QString repoName);
-    bool fileAlreadyExist(const Package &package, const QStringList &checkFilePaths);
+    bool fileAlreadyExist(Package &package, const QStringList &checkFilePaths);
     bool readExcludeFile(const QString filePath, QStringList &patterns);
     bool matchWithWildcard(const QString &str, const QStringList &list);
 };

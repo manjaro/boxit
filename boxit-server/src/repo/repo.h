@@ -21,19 +21,48 @@
 #ifndef REPO_H
 #define REPO_H
 
-#include <QObject>
 #include <QString>
-#include "repothread.h"
+#include <QStringList>
+#include <QList>
+#include <QFile>
+#include <QTextStream>
+#include <QDir>
+#include <QDateTime>
+#include <QCryptographicHash>
+#include "const.h"
+#include "global.h"
 
 
-class Repo : public QObject, public RepoBase
+class Repo
 {
-    Q_OBJECT
 public:
     explicit Repo(QString name, QString path, QString architecture);
+    bool operator==(const Repo &repo);
 
-    RepoThread thread;
+    bool update();
+    void updateName(QString name);
+    bool setSyncURL(QString url);
+    bool setNewRandomState();
+
+    QString getName() { return name; }
+    QString getPath() { return path; }
+    QString getRepoDB() { return repoDB; }
+    QString getRepoDBLink() { return repoDBLink; }
+    QString getSyncURL() { return syncURL; }
+    QString getSyncExcludeFile() { return syncExcludeFile; }
+    QString getArchitecture() { return architecture; }
+    QStringList getPackages() { return packages; }
+    QStringList getSignatures() { return signatures; }
+    QString getState() { return state; }
+
+
+protected:
+    QString name, path, architecture, repoDB, repoDBLink, syncURL, syncExcludeFile, state;
+    QStringList packages, signatures;
+
+private:
+    bool readConfig();
+    bool updateConfig();
 };
-
 
 #endif // REPO_H

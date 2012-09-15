@@ -21,7 +21,6 @@
 #include "repodb.h"
 
 
-RepoDB RepoDB::self;
 QList<Repo*> RepoDB::repos;
 QMutex RepoDB::mutex;
 
@@ -29,49 +28,75 @@ QMutex RepoDB::mutex;
 
 void RepoDB::initRepoDB() {
     QMutexLocker locker(&mutex);
-    QStringList repoList = QDir(Global::getConfig().repoDir).entryList(QDir::AllDirs | QDir::NoDotAndDotDot, QDir::Name);
+
+    QString repoDir = Global::getConfig().repoDir;
+    QStringList repoList = QDir(repoDir).entryList(QDir::AllDirs | QDir::NoDotAndDotDot, QDir::Name);
+    QStringList architectures = QString(BOXIT_ARCHITECTURES).split(" ", QString::SkipEmptyParts);
 
     for (int i = 0; i < repoList.size(); ++i) {
-        QStringList architectures = QString(BOXIT_ARCHITECTURES).split(" ", QString::SkipEmptyParts);
+        QString repo = repoList.at(i);
 
         for (int x = 0; x < architectures.size(); ++x) {
-            if (!_newRepo(repoList.at(i), architectures.at(x)))
-                cerr << "warning: failed to add repo " << repoList.at(i).toAscii().data() << ":" << architectures.at(x).toAscii().data() << "!" << endl;
+            QString architecture = architectures.at(x);
+
+            // Remove base repo folder if emtpy
+            if (!QDir().exists(repoDir + "/" + repo + "/" + architecture))
+                cleanupBaseRepoDirIfRequired(repo);
+            else if (!newRepo(repo, architecture))
+                cerr << QString("warning: failed to add repo %1:%2!").arg(repo , architecture).toAscii().data() << endl;
         }
     }
 }
 
 
 
-Repo* RepoDB::lockRepo(QString name, QString architecture, QString username) {
+bool RepoDB::fileExistsInRepos(QString filename) {
     QMutexLocker locker(&mutex);
 
+    for (int i = 0; i < repos.size(); ++i) {
+        QStringList packages = repos.at(i)->getPackages();
+
+        for (int i = 0; i < packages.size(); ++i) {
+            QString package = packages.at(i);
+
+            if (package == filename || package + BOXIT_SIGNATURE_ENDING == filename)
+                return true;
+        }
+    }
+
+    return false;
+}
+
+
+
+bool RepoDB::lockPool(QString username, QString name, QString architecture) {
+    QMutexLocker locker(&mutex);
     Repo *repo;
 
-    if (!repoArgsValid(name, architecture) || (repo = _getRepo(name, architecture)) == NULL || repo->isLocked() || repo->thread.isRunning())
-        return NULL;
+    if ((repo = getRepo(name, architecture)) == NULL || Pool::isLocked(repo))
+        return false;
 
-    repo->lock(username);
-    return repo;
+    return Pool::lock(repo, username);
 }
+
 
 
 
 bool RepoDB::repoExists(QString name, QString architecture) {
     QMutexLocker locker(&mutex);
-    return (_getRepo(name, architecture) != NULL);
+    return (getRepo(name, architecture) != NULL);
 }
 
 
 
 bool RepoDB::repoIsBusy(QString name, QString architecture) {
     QMutexLocker locker(&mutex);
-    Repo *repo = _getRepo(name, architecture);
+    Repo *repo;
 
-    if (repo == NULL)
+    if ((repo = getRepo(name, architecture)) == NULL)
         return false;
 
-    return (repo->isLocked() || repo->thread.isRunning());
+    return Pool::isLocked(repo);
 }
 
 
@@ -86,8 +111,6 @@ QList<RepoDB::RepoInfo> RepoDB::getRepoList() {
         RepoInfo info;
         info.name = repo->getName();
         info.architecture = repo->getArchitecture();
-        info.threadJob = repo->getThreadJob();
-        info.threadState = repo->getThreadState();
 
         infos.append(info);
     }
@@ -97,10 +120,67 @@ QList<RepoDB::RepoInfo> RepoDB::getRepoList() {
 
 
 
+bool RepoDB::mergeRepos(QString username, QString srcName, QString destName, QString architecture) {
+    QMutexLocker locker(&mutex);
+    Repo *srcRepo, *destRepo;
+
+    if ((srcRepo = getRepo(srcName, architecture)) == NULL
+            || (destRepo = getRepo(destName, architecture)) == NULL
+            || Pool::isLocked(srcRepo)
+            || Pool::isLocked(destRepo)
+            || !Pool::lock(destRepo, username))
+        return false;
+
+    QStringList srcPackages = srcRepo->getPackages();
+    QStringList destPackages = destRepo->getPackages();
+
+    // Set all packages to add
+    for (int i = 0; i < srcPackages.size(); ++i) {
+        QString srcPackage = srcPackages.at(i);
+        bool found = false;
+
+        for (int i = 0; i < destPackages.size(); ++i) {
+            if (destPackages.at(i) == srcPackage) {
+                found = true;
+                break;
+            }
+        }
+
+        if (!found)
+            Pool::addFile(srcPackage);
+    }
+
+    // Set all packages to remove
+    for (int i = 0; i < destPackages.size(); ++i) {
+        QString destPackage = destPackages.at(i);
+        bool found = false;
+
+        for (int i = 0; i < srcPackages.size(); ++i) {
+            if (srcPackages.at(i) == destPackage) {
+                found = true;
+                break;
+            }
+        }
+
+        if (!found)
+            Pool::removeFile(destPackage);
+    }
+
+    if (!Pool::commit()) {
+        Pool::unlock();
+        return false;
+    }
+
+    return true;
+}
+
+
+
 bool RepoDB::createRepo(QString name, QString architecture) {
     QMutexLocker locker(&mutex);
 
-    if (!repoArgsValid(name, architecture) || _getRepo(name, architecture) != NULL)
+    // Check if repo already exists
+    if (getRepo(name, architecture) != NULL)
         return false;
 
 
@@ -123,58 +203,18 @@ bool RepoDB::createRepo(QString name, QString architecture) {
 
 
     // Create new repo
-    if (!_newRepo(name, architecture))
+    if (!newRepo(name, architecture))
         return false;
 
     return true;
 }
 
 
-
-bool RepoDB::removeRepo(QString username, QString name, QString architecture) {
-    QMutexLocker locker(&mutex);
-    Repo *repo;
-
-    if (!repoArgsValid(name, architecture) || (repo = _getRepo(name, architecture)) == NULL || repo->isLocked() || repo->thread.isRunning())
-        return false;
-
-    repo->cleanupTMPDir();
-    return repo->thread.start(username, RepoThread::JOB_REMOVE);
-}
-
-
-
-bool RepoDB::moveRepo(QString username, QString name, QString architecture, QString newName) {
-    QMutexLocker locker(&mutex);
-    Repo *repo;
-
-    if (newName.isEmpty() || _getRepo(newName, architecture) != NULL || !repoArgsValid(name, architecture) || (repo = _getRepo(name, architecture)) == NULL || repo->isLocked() || repo->thread.isRunning())
-        return false;
-
-    repo->cleanupTMPDir();
-    return repo->thread.start(username, RepoThread::JOB_MOVE, newName);
-}
-
-
-
-bool RepoDB::copyRepo(QString username, QString name, QString architecture, QString newName) {
-    QMutexLocker locker(&mutex);
-    Repo *repo;
-
-    if (newName.isEmpty() || _getRepo(newName, architecture) != NULL || !repoArgsValid(name, architecture) || (repo = _getRepo(name, architecture)) == NULL || repo->isLocked() || repo->thread.isRunning())
-        return false;
-
-    repo->cleanupTMPDir();
-    return repo->thread.start(username, RepoThread::JOB_COPY, newName);
-}
-
-
-
 bool RepoDB::changeRepoSyncURL(QString name, QString architecture, QString syncURL) {
     QMutexLocker locker(&mutex);
     Repo *repo;
 
-    if (!repoArgsValid(name, architecture) || (repo = _getRepo(name, architecture)) == NULL || repo->isLocked() || repo->thread.isRunning())
+    if ((repo = getRepo(name, architecture)) == NULL || Pool::isLocked(repo))
         return false;
 
     return repo->setSyncURL(syncURL);
@@ -186,7 +226,7 @@ bool RepoDB::getRepoSyncURL(QString name, QString architecture, QString &syncURL
     QMutexLocker locker(&mutex);
     Repo *repo;
 
-    if (!repoArgsValid(name, architecture) || (repo = _getRepo(name, architecture)) == NULL || repo->isLocked() || repo->thread.isRunning())
+    if ((repo = getRepo(name, architecture)) == NULL || Pool::isLocked(repo))
         return false;
 
     syncURL = repo->getSyncURL();
@@ -195,47 +235,16 @@ bool RepoDB::getRepoSyncURL(QString name, QString architecture, QString &syncURL
 
 
 
-bool RepoDB::repoRebuildDB(QString username, QString name, QString architecture) {
+bool RepoDB::repoSync(QString username, QString name, QString architecture, QString customSyncPackages) {
     QMutexLocker locker(&mutex);
     Repo *repo;
 
-    if (!repoArgsValid(name, architecture) || (repo = _getRepo(name, architecture)) == NULL || repo->isLocked() || repo->thread.isRunning())
+    if (Pool::isLocked() || (repo = getRepo(name, architecture)) == NULL || repo->getSyncURL().isEmpty() || !Pool::lock(repo, username))
         return false;
 
-    if (!repo->update())
-        return false;
-
-    return repo->thread.start(username, RepoThread::JOB_DB_REBUILD);
+    return Pool::synchronize(customSyncPackages);
 }
 
-
-
-bool RepoDB::repoSync(QString username, QString name, QString architecture, QString customSyncPackages, bool updateRepoFirst) {
-    QMutexLocker locker(&mutex);
-    Repo *repo;
-
-    if (!repoArgsValid(name, architecture) || (repo = _getRepo(name, architecture)) == NULL || repo->isLocked() || repo->thread.isRunning() || repo->getSyncURL().isEmpty())
-        return false;
-
-    if (updateRepoFirst && !repo->update())
-        return false;
-
-    return repo->thread.start(username, RepoThread::JOB_SYNC, customSyncPackages);
-}
-
-
-
-bool RepoDB::getRepoSyncInfo(QString name, QString architecture, bool &hasTMPSync) {
-    QMutexLocker locker(&mutex);
-    Repo *repo;
-
-    if (!repoArgsValid(name, architecture) || (repo = _getRepo(name, architecture)) == NULL || repo->isLocked() || repo->thread.isRunning())
-        return false;
-
-    hasTMPSync = repo->hasTMPSync();
-
-    return true;
-}
 
 
 
@@ -243,7 +252,7 @@ bool RepoDB::getRepoState(QString name, QString architecture, QString &state) {
     QMutexLocker locker(&mutex);
     Repo *repo;
 
-    if (!repoArgsValid(name, architecture) || (repo = _getRepo(name, architecture)) == NULL || repo->isLocked() || repo->thread.isRunning())
+    if ((repo = getRepo(name, architecture)) == NULL || Pool::isLocked(repo))
         return false;
 
     state = repo->getState();
@@ -257,7 +266,7 @@ bool RepoDB::getRepoPackages(QString name, QString architecture, QStringList &pa
     QMutexLocker locker(&mutex);
     Repo *repo;
 
-    if (!repoArgsValid(name, architecture) || (repo = _getRepo(name, architecture)) == NULL || repo->isLocked() || repo->thread.isRunning())
+    if ((repo = getRepo(name, architecture)) == NULL || Pool::isLocked(repo))
         return false;
 
     packages = repo->getPackages();
@@ -271,7 +280,7 @@ bool RepoDB::getRepoSignatures(QString name, QString architecture, QStringList &
     QMutexLocker locker(&mutex);
     Repo *repo;
 
-    if (!repoArgsValid(name, architecture) || (repo = _getRepo(name, architecture)) == NULL || repo->isLocked() || repo->thread.isRunning())
+    if ((repo = getRepo(name, architecture)) == NULL || Pool::isLocked(repo))
         return false;
 
     signatures = repo->getSignatures();
@@ -285,7 +294,7 @@ bool RepoDB::getRepoExcludeContent(QString name, QString architecture, QString &
     QMutexLocker locker(&mutex);
     Repo *repo;
 
-    if (!repoArgsValid(name, architecture) || (repo = _getRepo(name, architecture)) == NULL || repo->isLocked() || repo->thread.isRunning())
+    if ((repo = getRepo(name, architecture)) == NULL || Pool::isLocked(repo))
         return false;
 
     QFile file(repo->getPath() + "/" + repo->getSyncExcludeFile());
@@ -305,7 +314,7 @@ bool RepoDB::setRepoExcludeContent(QString name, QString architecture, QString c
     QMutexLocker locker(&mutex);
     Repo *repo;
 
-    if (!repoArgsValid(name, architecture) || (repo = _getRepo(name, architecture)) == NULL || repo->isLocked() || repo->thread.isRunning())
+    if ((repo = getRepo(name, architecture)) == NULL || Pool::isLocked(repo))
         return false;
 
     QFile file(repo->getPath() + "/" + repo->getSyncExcludeFile());
@@ -321,30 +330,22 @@ bool RepoDB::setRepoExcludeContent(QString name, QString architecture, QString c
 
 
 
-bool RepoDB::repoKillThread(QString name, QString architecture) {
+bool RepoDB::poolKillThread() {
     QMutexLocker locker(&mutex);
-    Repo *repo;
 
-    if (!repoArgsValid(name, architecture) || (repo = _getRepo(name, architecture)) == NULL || repo->isLocked() || !repo->thread.isRunning())
+    if (!Pool::isLocked())
         return false;
 
-    repo->thread.kill();
-
+    Pool::killThread();
     return true;
 }
 
 
 
-bool RepoDB::repoMessageHistory(QString name, QString architecture, QString &messageHistory) {
+QString RepoDB::poolMessageHistory() {
     QMutexLocker locker(&mutex);
-    Repo *repo;
 
-    if (!repoArgsValid(name, architecture) || (repo = _getRepo(name, architecture)) == NULL)
-        return false;
-
-    messageHistory = repo->thread.getMessageHistory();
-
-    return true;
+    return Pool::getMessageHistory();
 }
 
 
@@ -357,15 +358,25 @@ bool RepoDB::repoMessageHistory(QString name, QString architecture, QString &mes
 
 
 
-bool RepoDB::repoArgsValid(QString name, QString architecture) {
-    return (!name.isEmpty()
-            && !architecture.isEmpty()
-            && QString(BOXIT_ARCHITECTURES).split(" ", QString::SkipEmptyParts).contains(architecture));
+void RepoDB::cleanupBaseRepoDirIfRequired(QString repoName) {
+    QString path = QString(Global::getConfig().repoDir) + "/" + repoName;
+    QDir dir(path);
+
+    if (!dir.exists())
+        return;
+
+    // Remove base repo folder if emtpy
+    if (dir.entryList(QDir::NoDotAndDotDot | QDir::AllEntries).isEmpty())
+        Global::rmDir(path);
 }
 
 
 
-Repo* RepoDB::_getRepo(QString name, QString architecture) {
+Repo* RepoDB::getRepo(QString name, QString architecture) {
+    // Basic checks if repo name and arch is valid
+    if (name.isEmpty() || architecture.isEmpty())
+        return NULL;
+
     for (int i = 0; i < repos.size(); ++i) {
         Repo *repo = repos[i];
 
@@ -378,18 +389,16 @@ Repo* RepoDB::_getRepo(QString name, QString architecture) {
 
 
 
-bool RepoDB::_newRepo(QString name, QString architecture) {
+bool RepoDB::newRepo(QString name, QString architecture) {
     QString destPath = QString(Global::getConfig().repoDir) + "/" + name + "/" + architecture;
 
     if (!QDir().exists(destPath)) {
         // Remove base repo folder if emtpy
-        if (QDir(QString(Global::getConfig().repoDir) + "/" + name).entryList(QDir::NoDotAndDotDot | QDir::AllEntries, QDir::Name).isEmpty())
-            Global::rmDir(QString(Global::getConfig().repoDir) + "/" + name);
-
+        cleanupBaseRepoDirIfRequired(name);
         return false;
     }
 
-    if (_getRepo(name, architecture) != NULL)
+    if (getRepo(name, architecture) != NULL)
         return false;
 
     Repo *repo = new Repo(name, destPath, architecture);
@@ -397,11 +406,6 @@ bool RepoDB::_newRepo(QString name, QString architecture) {
         delete(repo);
         return false;
     }
-
-    QObject::connect(&repo->thread, SIGNAL(requestDeletion(RepoBase*))  ,   &self, SLOT(requestDeletion(RepoBase*)));
-    QObject::connect(&repo->thread, SIGNAL(requestNewRepo(QString,QString))  ,   &self, SLOT(requestNewRepo(QString,QString)));
-    QObject::connect(&repo->thread, SIGNAL(message(QString,QString,QString))    ,   &self, SIGNAL(message(QString,QString,QString)));
-    QObject::connect(&repo->thread, SIGNAL(finished(QString,QString,bool))  ,   &self, SIGNAL(finished(QString,QString,bool)));
 
     repos.append(repo);
     qSort(repos.begin(), repos.end(), sortRepoLessThan);
@@ -419,39 +423,4 @@ bool RepoDB::sortRepoLessThan(Repo *repo1, Repo *repo2) {
         return repo1->getArchitecture().toLower() < repo2->getArchitecture().toLower();
 
     return repo1Name < repo2Name;
-}
-
-
-
-
-//###
-//### Private slots
-//###
-
-
-
-
-void RepoDB::requestDeletion(RepoBase *repo) {
-    QMutexLocker locker(&mutex);
-
-    // Remove base repo folder if emtpy
-    if (QDir(QString(Global::getConfig().repoDir) + "/" + repo->getName()).entryList(QDir::NoDotAndDotDot | QDir::AllEntries, QDir::Name).isEmpty())
-        Global::rmDir(QString(Global::getConfig().repoDir) + "/" + repo->getName());
-
-
-    Repo *listRepo = _getRepo(repo->getName(), repo->getArchitecture());
-    if (listRepo == NULL)
-        return; // Shouldn't happen ;)
-
-    repos.removeAll(listRepo);
-    listRepo->thread.kill();
-    listRepo->deleteLater();
-}
-
-
-
-void RepoDB::requestNewRepo(QString name, QString architecture) {
-    QMutexLocker locker(&mutex);
-
-    _newRepo(name, architecture);
 }
