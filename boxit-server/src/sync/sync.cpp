@@ -266,7 +266,8 @@ bool Sync::fileAlreadyExist(Package &package, const QStringList &checkFilePaths)
     for (int i = 0; i < checkFilePaths.size(); ++i) {
         QString path = checkFilePaths.at(i) + "/" + package.fileName;
 
-        if (QFile::exists(path) && CryptSHA256::sha256CheckSum(path) == package.sha256sum)
+        //if (QFile::exists(path) && CryptSHA256::sha256CheckSum(path) == package.sha256sum)
+        if (QFile::exists(path)) // Sha256sum checking removed, because this could overwrite files and create invalid database files
             package.downloadPackage = false;
 
         if (QFile::exists(path + BOXIT_SIGNATURE_ENDING))

@@ -241,14 +241,15 @@ void BoxitInstance::read_Data(quint16 msgID, QByteArray data) {
 
         // Check if file exists and compare the checksums. Remove if different...
         if (file.exists()) {
-            if (fileCheckSum != sha1CheckSum(file.fileName())) {
+            // Because this could lead to broken database files with invalid checksum, this is commented.
+            /*if (fileCheckSum != sha1CheckSum(file.fileName())) {
                 file.remove();
             }
-            else {
+            else {*/
                 Pool::addFile(file.fileName().split("/", QString::SkipEmptyParts).last());
                 sendData(MSG_FILE_ALREADY_EXISTS);
                 break;
-            }
+            //}
         }
 
         if (!file.open(QIODevice::WriteOnly)) {
