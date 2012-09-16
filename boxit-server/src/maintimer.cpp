@@ -31,28 +31,21 @@ void MainTimer::run() {
     while (true) {
         QString poolDir = Global::getConfig().poolDir;
 
-        // Check for old packages in pool
-        QStringList list = QDir(poolDir).entryList(QDir::Files | QDir::NoDotAndDotDot);
-        QStringList filesToRemove;
+        if (Pool::lock()) {
+            // Check for old packages in pool
+            QStringList list = QDir(poolDir).entryList(QDir::Files | QDir::NoDotAndDotDot);
 
-        for (int i = 0; i < list.size(); ++i) {
-            QString file = list.at(i);
+            // Get only orphan files
+            RepoDB::removeFilesWhichExistsInReposFromList(list);
 
-            // Check if this is an orphan file
-            if (RepoDB::fileExistsInRepos(file))
-                continue;
+            for (int i = 0; i < list.size(); ++i) {
+                // Check when it was last modified
+                QString filePath = poolDir + "/" + list.at(i);
+                QFileInfo info(filePath);
 
-            // Check when it was last modified
-            QString filePath = poolDir + "/" + file;
-            QFileInfo info(filePath);
-
-            if (info.lastModified().daysTo(QDateTime::currentDateTime()) >= BOXIT_REMOVE_ORPHANS_AFTER_DAYS)
-                filesToRemove.append(filePath);
-        }
-
-        if (!filesToRemove.isEmpty() && Pool::lock()) {
-            for (int i = 0; i < filesToRemove.size(); ++i)
-                QFile::remove(filesToRemove.at(i));
+                if (info.lastModified().daysTo(QDateTime::currentDateTime()) >= BOXIT_REMOVE_ORPHANS_AFTER_DAYS)
+                    QFile::remove(filePath);
+            }
 
             Pool::unlock();
         }

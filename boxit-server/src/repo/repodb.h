@@ -44,7 +44,7 @@ public:
     };
 
     static void initRepoDB();
-    static bool fileExistsInRepos(QString filename);
+    static void removeFilesWhichExistsInReposFromList(QStringList &files);
     static bool lockPool(QString username, QString name, QString architecture);
     static bool repoExists(QString name, QString architecture);
     static bool repoIsBusy(QString name, QString architecture);

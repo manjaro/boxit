@@ -50,21 +50,36 @@ void RepoDB::initRepoDB() {
 
 
 
-bool RepoDB::fileExistsInRepos(QString filename) {
+void RepoDB::removeFilesWhichExistsInReposFromList(QStringList &files) {
     QMutexLocker locker(&mutex);
+    QStringList notFoundFiles;
 
-    for (int i = 0; i < repos.size(); ++i) {
-        QStringList packages = repos.at(i)->getPackages();
+    for (int i = 0; i < files.size(); ++i) {
+        QString filename = files.at(i);
+        bool found = false;
 
-        for (int i = 0; i < packages.size(); ++i) {
-            QString package = packages.at(i);
+        for (int i = 0; i < repos.size(); ++i) {
+            QStringList packages = repos.at(i)->getPackages();
 
-            if (package == filename || package + BOXIT_SIGNATURE_ENDING == filename)
-                return true;
+            for (int i = 0; i < packages.size(); ++i) {
+                QString package = packages.at(i);
+
+                if (package == filename || package + BOXIT_SIGNATURE_ENDING == filename) {
+                    found = true;
+                    break;
+                }
+            }
+
+            if (found)
+                break;
         }
+
+        if (!found)
+            notFoundFiles.append(filename);
     }
 
-    return false;
+    files = notFoundFiles;
+    files.removeDuplicates();
 }
 
 
