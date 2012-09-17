@@ -204,12 +204,17 @@ void Pool::run() {
     }
     case JOB_COMMIT:
     {
+        QStringList adddedFiles, removedFiles;
+
         // Remove files
         emitMessage("> removing symlinks...");
 
         for (int i = 0; i < removeFiles.size(); ++i) {
             QString filename = removeFiles.at(i);
             QString file = lockedRepo->getPath() + "/" + filename;
+
+            if (QFile::exists(file) || QFile::exists(file + BOXIT_SIGNATURE_ENDING))
+                removedFiles.append(filename);
 
             if (QFile::exists(file) && !QFile::remove(file)) {
                 emitMessage(QString("error: failed to remove symlink '%1'!").arg(file));
@@ -231,6 +236,9 @@ void Pool::run() {
             QString file = Global::getConfig().poolDir + "/" + filename;
             QString dest = lockedRepo->getPath() + "/" + filename;
             QString link = "../../" + QString(BOXIT_POOL_REPO) + "/" + filename;
+
+            if (!QFile::exists(dest) || !QFile::exists(dest + BOXIT_SIGNATURE_ENDING))
+                adddedFiles.append(filename);
 
             if (!QFile::exists(file) || (!QFile::exists(dest) && !QFile::link(link, dest))) {
                 emitMessage(QString("error: failed to link '%1'!").arg(file));
@@ -267,7 +275,7 @@ void Pool::run() {
         }
 
         // Send e-mail
-        Global::sendMemoEMail(lockedUsername, lockedRepo->getName(), lockedRepo->getArchitecture(), addFiles, removeFiles);
+        Global::sendMemoEMail(lockedUsername, lockedRepo->getName(), lockedRepo->getArchitecture(), adddedFiles, removedFiles);
 
         goto successskipupdate;
     }
