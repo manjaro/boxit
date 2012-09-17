@@ -204,6 +204,8 @@ bool RepoDB::createRepo(QString name, QString architecture) {
     if (!QDir().exists(path) && !QDir().mkpath(path))
         return false;
 
+    // Fix file permission
+    Global::fixFilePermission(path);
 
     // Create repo config
     QFile file(path + "/" + BOXIT_REPO_CONFIG);

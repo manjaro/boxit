@@ -31,6 +31,7 @@
 #include <QFileInfo>
 #include <QTextStream>
 #include "const.h"
+#include <sys/stat.h>
 
 
 
@@ -43,6 +44,7 @@ public:
 
     static QString getNameofPKG(QString pkg);
     static QString getVersionofPKG(QString pkg);
+    static bool fixFilePermission(QString file) ;
     static bool sendMemoEMail(QString username, QString repository, QString architecture, QStringList addedFiles, QStringList removedFiles);
     static bool sendEMail(QString subject, QString to, QString text);
     static bool rmDir(QString path, bool onlyHidden = false, bool onlyContent = false);

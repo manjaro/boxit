@@ -277,6 +277,7 @@ void BoxitInstance::read_Data(quint16 msgID, QByteArray data) {
         }
 
         file.close();
+        Global::fixFilePermission(file.fileName());
 
         if (fileCheckSum != sha1CheckSum(file.fileName())) {
             fileCheckSum.clear();

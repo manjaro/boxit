@@ -56,6 +56,19 @@ QString Global::getVersionofPKG(QString pkg) {
 
 
 
+bool Global::fixFilePermission(QString file) {
+    int ret;
+
+    // Set right permission
+    mode_t process_mask = umask(0);
+    ret = chmod(file.toAscii().data(), S_IRUSR | S_IWUSR | S_IXUSR | S_IRGRP | S_IROTH | S_IXGRP | S_IXOTH);
+    umask(process_mask);
+
+    return (ret == 0);
+}
+
+
+
 bool Global::sendMemoEMail(QString username, QString repository, QString architecture, QStringList addedFiles, QStringList removedFiles) {
     // Prepare e-mail message
     removedFiles.sort();
