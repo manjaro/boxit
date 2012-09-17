@@ -101,13 +101,14 @@ bool Sync::synchronize(QString url, const QString repoName, const QString exclud
     // Create a list only with the packages to download
     for (int i = 0; i < packages.size(); ++i) {
         Package package = packages.at(i);
-        allDBPackages.append(package.fileName);
-
-        if (!onlyFiles.isEmpty() && !onlyFiles.contains(package.packageName))
-            continue;
 
         // Check if the file is blacklisted, but only if this isn't excplicit forced by the user
         if (onlyFiles.isEmpty() && matchWithWildcard(package.packageName, patterns))
+            continue;
+
+        allDBPackages.append(package.fileName);
+
+        if (!onlyFiles.isEmpty() && !onlyFiles.contains(package.packageName))
             continue;
 
         addedFiles.append(package.fileName);
