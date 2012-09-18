@@ -38,7 +38,7 @@
 #define BOXIT_DB_LINK_ENDING ".db"
 #define BOXIT_DB_DESC_FILE "desc"
 #define BOXIT_FLUSH_STRING "#!f"
-#define BOXIT_REMOVE_ORPHANS_AFTER_DAYS 5
+#define BOXIT_REMOVE_ORPHANS_AFTER_DAYS 3
 
 
 // Socket IDs

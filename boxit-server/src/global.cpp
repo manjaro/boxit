@@ -96,8 +96,15 @@ bool Global::sendMemoEMail(QString username, QString repository, QString archite
     if (!removedFiles.isEmpty())
         mailMessage += "\n\n\n### Removed package(s) ###\n\n" + removedFiles.join("\n");
 
-    // Send e-mail message to mailing list
-    return Global::sendEMail("[BoxIt] commit memo", Global::getConfig().mailingListEMail, mailMessage);
+    // Send e-mail message to mailing lists
+    bool ret = true;
+
+    for (int i = 0; i < config.mailingListEMails.size(); ++i) {
+        if (!Global::sendEMail("[BoxIt] commit memo", config.mailingListEMails.at(i), mailMessage))
+            ret = false;
+    }
+
+    return ret;
 }
 
 
@@ -208,6 +215,14 @@ Global::Config Global::getConfig() {
 
 
 bool Global::readConfig() {
+    // Cleanup
+    config.salt.clear();
+    config.repoDir.clear();
+    config.poolDir.clear();
+    config.sslCertificate.clear();
+    config.sslKey.clear();
+    config.mailingListEMails.clear();
+
     // Read config
     QFile file(BOXIT_SERVER_CONFIG);
     if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
@@ -235,12 +250,12 @@ bool Global::readConfig() {
             config.sslKey = arg2;
         }
         else if (arg1 == "mailinglistemail") {
-            config.mailingListEMail = arg2;
+            config.mailingListEMails.append(arg2);
         }
     }
     file.close();
 
-    if (config.salt.isEmpty() || config.repoDir.isEmpty() || config.sslCertificate.isEmpty() || config.sslKey.isEmpty() || config.mailingListEMail.isEmpty())
+    if (config.salt.isEmpty() || config.repoDir.isEmpty() || config.sslCertificate.isEmpty() || config.sslKey.isEmpty() || config.mailingListEMails.isEmpty())
         return false;
 
     return true;

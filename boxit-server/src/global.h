@@ -39,7 +39,8 @@ class Global
 {
 public:
     struct Config {
-        QString salt, sslCertificate, sslKey, repoDir, poolDir, mailingListEMail;
+        QString salt, sslCertificate, sslKey, repoDir, poolDir;
+        QStringList mailingListEMails;
     };
 
     static QString getNameofPKG(QString pkg);
