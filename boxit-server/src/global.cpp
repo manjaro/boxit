@@ -70,6 +70,9 @@ bool Global::fixFilePermission(QString file) {
 
 
 bool Global::sendMemoEMail(QString username, QString repository, QString architecture, QStringList addedFiles, QStringList removedFiles) {
+    if (removedFiles.isEmpty() && addedFiles.isEmpty())
+        return true;
+
     // Prepare e-mail message
     removedFiles.sort();
     addedFiles.sort();

@@ -446,11 +446,15 @@ bool Pool::addPackagesToDatabase(const QStringList &packages) {
     process.setWorkingDirectory(lockedRepo->getPath());
     process.start("repo-add", QStringList() << lockedRepo->getRepoDB() <<  packages);
 
-    if (!process.waitForFinished(-1))
+    if (!process.waitForFinished(-1)) {
+        emitMessage("error: add packages to database process failed to finish!");
         return false;
+    }
 
-    if (process.exitCode() != 0)
+    if (process.exitCode() != 0) {
+        emitMessage("error: failed to add packages to database: " + QString(process.readAll()));
         return false;
+    }
 
     return true;
 }
@@ -466,11 +470,15 @@ bool Pool::removePackagesFromDatabase(const QStringList &packages) {
     process.setWorkingDirectory(lockedRepo->getPath());
     process.start("repo-remove", QStringList() << lockedRepo->getRepoDB() <<  packages);
 
-    if (!process.waitForFinished(-1))
+    if (!process.waitForFinished(-1)) {
+        emitMessage("error: remove packages from database process failed to finish!");
         return false;
+    }
 
-    if (process.exitCode() != 0)
+    if (process.exitCode() != 0) {
+        emitMessage("error: failed to remove packages from database: " + QString(process.readAll()));
         return false;
+    }
 
     return true;
 }
