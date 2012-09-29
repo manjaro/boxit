@@ -86,6 +86,12 @@ void Download::cancle() {
     if (!busy || reply == NULL)
         return;
 
+    if (file.isOpen())
+        file.close();
+
+    if (file.exists())
+        file.remove();
+
     busy = false;
     error = true;
     errorStr = "download cancled!";
@@ -136,6 +142,9 @@ void Download::finishedDownload() {
         error = true;
         errorStr = "Network reply is already destroyed!?";
     }
+
+    if (error && file.exists())
+        file.remove();
 
     // Retry if this was the first attempt
     if (error && attempts < RETRYATTEMPTS) {
