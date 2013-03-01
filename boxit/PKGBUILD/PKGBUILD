@@ -3,12 +3,12 @@
 
 pkgname=boxit
 pkgver=2.0.3
-pkgrel=1
+pkgrel=2
 pkgdesc="Manjaro Linux repository management system - client"
 arch=('i686' 'x86_64')
 url="http://git.manjaro.org"
 license=('GPL')
-depends=('qt' 'readline')
+depends=('qt4' 'readline')
 _git=no
 
 getsource() {
@@ -37,7 +37,7 @@ build() {
 
   cd "${srcdir}/${pkgname}/${pkgname}/src"
 
-  qmake
+  qmake4
   make all
   make INSTALL_ROOT="${pkgdir}" install
 }
