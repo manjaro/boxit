@@ -37,7 +37,11 @@ build() {
 
   cd "${srcdir}/${pkgname}/${pkgname}/src"
 
-  qmake4
+  qmake-qt4
   make all
+}
+
+package() {
+  cd "${srcdir}/${pkgname}/${pkgname}/src"
   make INSTALL_ROOT="${pkgdir}" install
 }
