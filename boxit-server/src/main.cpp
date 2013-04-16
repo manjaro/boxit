@@ -25,11 +25,11 @@
 #include <iostream>
 #include "global.h"
 #include "network/boxitserver.h"
-#include "repo/repodb.h"
+#include "db/database.h"
+#include "db/status.h"
 #include "maintimer.h"
 
 using namespace std;
-
 
 
 
@@ -72,7 +72,7 @@ int main(int argc, char *argv[])
 {
     QCoreApplication app(argc, argv);
     BoxitServer boxitServer(&app);
-    MainTimer mainTimer;
+    MainTimer mainTimer(&app);
 
     // Read config
     if (!Global::readConfig()) {
@@ -80,27 +80,27 @@ int main(int argc, char *argv[])
         return 1;
     }
 
+
     // Check arguments
-    if (app.arguments().last() == "--adduser") {
+    if (app.arguments().contains("--adduser")) {
         if (addUser())
             return 0;
         else
             return 1;
     }
-    else if (app.arguments().last() == "-h" || app.arguments().last() == "--help") {
+    else if (app.arguments().contains("-h") || app.arguments().contains("--help")) {
         printHelp();
         return 0;
     }
 
 
-
-    // Fill repo
-    cout << "reading database..." << endl;
-    RepoDB::initRepoDB();
+    // Initialize repositories
+    cout << "initializing repositories..." << endl;
+    Database::init();
+    Status::self.init();
 
 
     // Start main timer
-    cout << "starting main timer..." << endl;
     mainTimer.start();
 
 

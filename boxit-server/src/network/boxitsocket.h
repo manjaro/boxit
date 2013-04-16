@@ -1,5 +1,6 @@
 /*
- *  Fuchs - Manjaro Repository Management
+ *  BoxIt - Manjaro Linux Repository Management Software
+ *  Roland Singer <roland@manjaro.org>
  *
  *  Copyright (C) 2007 Free Software Foundation, Inc.
  *
@@ -26,6 +27,7 @@
 #include <QByteArray>
 #include <QDataStream>
 #include <QList>
+#include <QTimer>
 #include <iostream>
 #include "const.h"
 
@@ -36,7 +38,7 @@ class BoxitSocket : public QSslSocket
 {
     Q_OBJECT
 public:
-    explicit BoxitSocket(QObject *parent = 0);
+    explicit BoxitSocket(const int sessionID, QObject *parent = 0);
 
     void sendData(quint16 msgID);
     void sendData(quint16 msgID, QByteArray data);
@@ -48,9 +50,16 @@ private slots:
     void readyReadData();
     void socketError();
     void sslErrors(const QList<QSslError> &errors);
+    void timeOutDestroy();
 
 private:
     quint16 readBlockSize, readMSGID;
+    QByteArray data;
+    int timeoutCount;
+    QTimer timeOutTimer;
+
+protected:
+    const int sessionID;
 
 };
 

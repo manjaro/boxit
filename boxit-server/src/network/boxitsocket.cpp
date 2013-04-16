@@ -1,5 +1,6 @@
 /*
- *  Fuchs - Manjaro Repository Management
+ *  BoxIt - Manjaro Linux Repository Management Software
+ *  Roland Singer <roland@manjaro.org>
  *
  *  Copyright (C) 2007 Free Software Foundation, Inc.
  *
@@ -19,25 +20,33 @@
 
 #include "boxitsocket.h"
 
-BoxitSocket::BoxitSocket(QObject *parent) :
-    QSslSocket(parent)
+BoxitSocket::BoxitSocket(int sessionID, QObject *parent) :
+    QSslSocket(parent),
+    sessionID(sessionID)
 {
     setReadBufferSize(0);
     setPeerVerifyMode(QSslSocket::VerifyNone);
 
     readBlockSize = 0;
     readMSGID = 0;
+    timeoutCount = 0;
+    timeOutTimer.setInterval(5000);
 
+    // Connect signals and slots
     connect(this, SIGNAL(readyRead())   ,   this, SLOT(readyReadData()));
     connect(this, SIGNAL(sslErrors(QList<QSslError>))   ,   this, SLOT(sslErrors(QList<QSslError>)));
     connect(this, SIGNAL(error(QAbstractSocket::SocketError))   ,   this, SLOT(socketError()));
+    connect(&timeOutTimer, SIGNAL(timeout())    ,   this, SLOT(timeOutDestroy()));
+
+    // Start timeout timer
+    timeOutTimer.start();
 }
 
 
 
 void BoxitSocket::readyReadData() {
     QDataStream in(this);
-    in.setVersion(QDataStream::Qt_4_0);
+    in.setVersion(QDataStream::Qt_4_8);
 
 
     if (readBlockSize == 0) {
@@ -60,9 +69,21 @@ void BoxitSocket::readyReadData() {
         return;
 
 
-    QByteArray data;
-    in >> data;
-    emit readData(readMSGID, data);
+    QByteArray subData;
+    in >> subData;
+    data.append(subData);
+
+    // Restart our timeout
+    timeoutCount = 0;
+
+    // Emit signal
+    if (readMSGID != MSG_RESET_TIMEOUT
+            && readMSGID != MSG_DATA_PACKAGE_MULTIPLE)
+        emit readData(readMSGID, data);
+
+    // Clear data if this isn't a multiple package
+    if (readMSGID != MSG_DATA_PACKAGE_MULTIPLE)
+        data.clear();
 
     readBlockSize = 0;
     readMSGID = 0;
@@ -80,19 +101,33 @@ void BoxitSocket::sendData(quint16 msgID) {
 
 
 void BoxitSocket::sendData(quint16 msgID, QByteArray data) {
-    QByteArray block;
-    QDataStream out(&block, QIODevice::WriteOnly);
-    out.setVersion(QDataStream::Qt_4_0);
-    out << (quint16)0;
-    out << (quint16)msgID;
-    out << data;
-    out.device()->seek(0);
-    out << (quint16)(block.size() - 2*sizeof(quint16));
+    // Send data in multiple data packages, if data is too big...
+    while (true) {
+        QByteArray subData = data.mid(0, BOXIT_SOCKET_MAX_SIZE);
+        data.remove(0, BOXIT_SOCKET_MAX_SIZE);
 
-    write(block);
-    flush();
+        quint16 subMsgID = msgID;
+        if (!data.isEmpty())
+            subMsgID = MSG_DATA_PACKAGE_MULTIPLE;
 
-    waitForBytesWritten(2000);
+        // Send data
+        QByteArray block;
+        QDataStream out(&block, QIODevice::WriteOnly);
+        out.setVersion(QDataStream::Qt_4_0);
+        out << (quint16)0;
+        out << (quint16)subMsgID;
+        out << subData;
+        out.device()->seek(0);
+        out << (quint16)(block.size() - 2*sizeof(quint16));
+
+        write(block);
+        flush();
+
+        waitForBytesWritten(2000);
+
+        if (data.isEmpty())
+            break;
+    }
 }
 
 
@@ -104,7 +139,10 @@ void BoxitSocket::sendData(quint16 msgID, QByteArray data) {
 
 
 void BoxitSocket::socketError() {
-  cerr << errorString().toAscii().data() << endl;
+    if (error() == QAbstractSocket::RemoteHostClosedError)
+        return;
+
+    cerr << errorString().toAscii().data() << endl;
 }
 
 
@@ -124,4 +162,14 @@ void BoxitSocket::sslErrors(const QList<QSslError> &errors) {
 
         cerr << error.errorString().toAscii().data() << endl;
     }
+}
+
+
+
+void BoxitSocket::timeOutDestroy() {
+    timeoutCount += 5;
+
+    // Disconnect after 3 minutes...
+    if (timeoutCount >= 180)
+        disconnectFromHost();
 }

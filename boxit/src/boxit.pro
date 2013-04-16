@@ -19,17 +19,20 @@ TEMPLATE = app
 SOURCES += main.cpp \
     boxitsocket.cpp \
     version.cpp \
-    interactiveprocess.cpp \
-    timeoutreset.cpp
+    timeoutreset.cpp \
+    interactiveprocess.cpp
 
 HEADERS += \
     boxitsocket.h \
     const.h \
     version.h \
-    interactiveprocess.h \
-    timeoutreset.h
+    timeoutreset.h \
+    interactiveprocess.h
 
 
 target.path = /usr/bin
 
 INSTALLS += target
+
+RESOURCES += \
+    resources.qrc

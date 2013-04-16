@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/bash
 #
 #   pkgdelta - create delta files for use with pacman and repo-add
 #   Generated from pkgdelta.sh.in; do not edit by hand.

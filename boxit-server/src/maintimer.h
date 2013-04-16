@@ -30,8 +30,7 @@
 #include <QDateTime>
 #include "global.h"
 #include "const.h"
-#include "repo/repodb.h"
-#include "repo/pool.h"
+#include "db/database.h"
 
 
 class MainTimer : public QThread
@@ -39,7 +38,9 @@ class MainTimer : public QThread
     Q_OBJECT
 public:
     explicit MainTimer(QObject *parent = 0);
+    ~MainTimer();
     
+protected:
     void run();
     
 };

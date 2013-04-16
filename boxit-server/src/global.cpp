@@ -27,6 +27,8 @@
 //###
 
 Global::Config Global::config;
+int Global::lastSessionID = 10;
+QMutex Global::newSessionIDMutex;
 
 
 
@@ -34,6 +36,16 @@ Global::Config Global::config;
 //###
 //### Static methods
 //###
+
+
+int Global::getNewUniqueSessionID() {
+    QMutexLocker locker(&newSessionIDMutex);
+
+    ++lastSessionID;
+    return lastSessionID;
+}
+
+
 
 
 QString Global::getNameofPKG(QString pkg) {
@@ -65,6 +77,22 @@ bool Global::fixFilePermission(QString file) {
     umask(process_mask);
 
     return (ret == 0);
+}
+
+
+
+QByteArray Global::sha1CheckSum(QString filePath) {
+    QCryptographicHash crypto(QCryptographicHash::Sha1);
+    QFile file(filePath);
+
+    if (!file.open(QFile::ReadOnly))
+        return QByteArray();
+
+    while(!file.atEnd()){
+        crypto.addData(file.read(8192));
+    }
+
+    return crypto.result();
 }
 
 
@@ -221,7 +249,8 @@ bool Global::readConfig() {
     // Cleanup
     config.salt.clear();
     config.repoDir.clear();
-    config.poolDir.clear();
+    config.syncPoolDir.clear();
+    config.overlayPoolDir.clear();
     config.sslCertificate.clear();
     config.sslKey.clear();
     config.mailingListEMails.clear();
@@ -237,14 +266,16 @@ bool Global::readConfig() {
         if (line.isEmpty() || !line.contains("="))
             continue;
 
-        QString arg1 = line.split("=").first().toLower().trimmed(), arg2 = line.split("=").last().trimmed();
+        QString arg1 = line.split("=").first().toLower().trimmed();
+        QString arg2 = line.split("=").last().trimmed();
 
         if (arg1 == "salt") {
             config.salt = arg2;
         }
         else if (arg1 == "repodir") {
             config.repoDir = arg2;
-            config.poolDir = arg2 + "/" + BOXIT_POOL_REPO;
+            config.syncPoolDir = arg2 + "/" + BOXIT_SYNC_POOL;
+            config.overlayPoolDir = arg2 + "/" + BOXIT_OVERLAY_POOL;
         }
         else if (arg1 == "sslcertificate") {
             config.sslCertificate = arg2;

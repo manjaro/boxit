@@ -1,4 +1,6 @@
 *~
 *.pro.user
 build
+build-debug
 certificates
+

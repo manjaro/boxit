@@ -64,14 +64,17 @@ bool BoxitSocket::readData(quint16 &msgID) {
 
 bool BoxitSocket::readData(quint16 &msgID, QByteArray &data) {
     data.clear();
-    msgID = 0;
 
-    quint16 blockSize = 0;
-    QDataStream in(this);
-    in.setVersion(QDataStream::Qt_4_0);
+    while (true) {
+        QByteArray subData;
+        quint16 blockSize;
+        QDataStream in(this);
+        in.setVersion(QDataStream::Qt_4_8);
+
+        blockSize = msgID = 0;
 
 
-    if (blockSize == 0) {
+        // Get block size
         while (bytesAvailable() < (int)sizeof(quint16)) {
             if (waitForReadyRead(-1))
                 continue;
@@ -81,10 +84,9 @@ bool BoxitSocket::readData(quint16 &msgID, QByteArray &data) {
         }
 
         in >> blockSize;
-    }
 
 
-    if (msgID == 0) {
+        // Get msg ID
         while (bytesAvailable() < (int)sizeof(quint16)) {
             if (waitForReadyRead(-1))
                 continue;
@@ -94,25 +96,31 @@ bool BoxitSocket::readData(quint16 &msgID, QByteArray &data) {
         }
 
         in >> msgID;
-    }
 
 
-    while (bytesAvailable() < blockSize) {
-        if (waitForReadyRead(-1))
-            continue;
+        // Get data
+        while (bytesAvailable() < blockSize) {
+            if (waitForReadyRead(-1))
+                continue;
 
-        if (bytesAvailable() < blockSize)
-            return false;
-    }
+            if (bytesAvailable() < blockSize)
+                return false;
+        }
 
-    in >> data;
+        in >> subData;
+        data.append(subData);
 
 
-    // Check if server received an invalid request
-    if (msgID == MSG_INVALID) {
-        cerr << "error: server has received an invalid request and has disconnected!" << endl;
-        disconnectFromHost();
-        exit(1);
+        // Check if server received an invalid request
+        if (msgID == MSG_INVALID) {
+            cerr << "error: server has received an invalid request and has disconnected!" << endl;
+            disconnectFromHost();
+            exit(1);
+        }
+
+        // If this isn't a multiple package then break the loop
+        if (msgID != MSG_DATA_PACKAGE_MULTIPLE)
+            break;
     }
 
     return true;
@@ -120,26 +128,40 @@ bool BoxitSocket::readData(quint16 &msgID, QByteArray &data) {
 
 
 
-bool BoxitSocket::sendData(quint16 msgID) {
-    return sendData(msgID, QByteArray());
+void BoxitSocket::sendData(quint16 msgID) {
+    sendData(msgID, QByteArray());
 }
 
 
 
-bool BoxitSocket::sendData(quint16 msgID, QByteArray data) {
-    QByteArray block;
-    QDataStream out(&block, QIODevice::WriteOnly);
-    out.setVersion(QDataStream::Qt_4_0);
-    out << (quint16)0;
-    out << (quint16)msgID;
-    out << data;
-    out.device()->seek(0);
-    out << (quint16)(block.size() - 2*sizeof(quint16));
+void BoxitSocket::sendData(quint16 msgID, QByteArray data) {
+    // Send data in multiple data packages, if data is too big...
+    while (true) {
+        QByteArray subData = data.mid(0, BOXIT_SOCKET_MAX_SIZE);
+        data.remove(0, BOXIT_SOCKET_MAX_SIZE);
 
-    write(block);
-    flush();
+        quint16 subMsgID = msgID;
+        if (!data.isEmpty())
+            subMsgID = MSG_DATA_PACKAGE_MULTIPLE;
 
-    return waitForBytesWritten(-1);
+        // Send data
+        QByteArray block;
+        QDataStream out(&block, QIODevice::WriteOnly);
+        out.setVersion(QDataStream::Qt_4_0);
+        out << (quint16)0;
+        out << (quint16)subMsgID;
+        out << subData;
+        out.device()->seek(0);
+        out << (quint16)(block.size() - 2*sizeof(quint16));
+
+        write(block);
+        flush();
+
+        waitForBytesWritten(-1);
+
+        if (data.isEmpty())
+            break;
+    }
 }
 
 
@@ -151,7 +173,7 @@ bool BoxitSocket::sendData(quint16 msgID, QByteArray data) {
 
 
 void BoxitSocket::hostDisconnected() {
-    cerr << "Connection lost - Maybe you have reached the timeout of 120 seconds?!" << endl;
+    cerr << "Connection lost - Maybe you have reached the timeout of 3 minutes?!" << endl;
     exit(1);
 }
 

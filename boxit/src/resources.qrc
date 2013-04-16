@@ -1,0 +1,5 @@
+<RCC>
+    <qresource prefix="/resources">
+        <file>resources/dummy.tar.xz</file>
+    </qresource>
+</RCC>

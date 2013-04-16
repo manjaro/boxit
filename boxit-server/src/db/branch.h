@@ -18,54 +18,58 @@
  *  along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef BOXITINSTANCE_H
-#define BOXITINSTANCE_H
+#ifndef BRANCH_H
+#define BRANCH_H
 
+#include <QObject>
 #include <QString>
 #include <QList>
 #include <QStringList>
-#include <QFile>
-#include <QTextStream>
-#include <QByteArray>
-#include <QCryptographicHash>
 #include <QMutex>
 #include <QMutexLocker>
-#include <unistd.h>
 
-#include "network/boxitsocket.h"
+#include "global.h"
 #include "const.h"
-#include "user/user.h"
-#include "user/userdbs.h"
-#include "db/database.h"
+#include "repo.h"
+#include "status.h"
+
+using namespace std;
 
 
-class BoxitInstance : public BoxitSocket
+class Branch : QObject
 {
     Q_OBJECT
 public:
-    BoxitInstance(const int sessionID);
-    ~BoxitInstance();
+    const QString name, path;
+    QList<Repo*> repos;
+
+    Branch(const QString name, const QString path);
+    ~Branch();
+
+    bool init();
+    bool setExcludeFilesContent(const QString content);
+    bool setUrl(const QString url);
+
+    QString getUrl() { return url; }
+    QStringList getExcludeFiles() { return excludeFiles; }
+    QString getExcludeFilesContent() { return excludeFilesContent; }
 
 private:
-    const QString tmpPath;
-    int loginCount, syncSessionID;
-    User user;
-    QFile file;
-    QByteArray fileCheckSum;
-    QStringList uploadedFiles;
-    bool listenOnStatus;
-    QMutex statusMutex;
+    QMutex repoThreadMutex, setBranchStateMutex;
+    QString url, excludeFilesContent;
+    QStringList excludeFiles;
 
-    void cleanupTmpDir();
-    void sendStringList(const quint16 msgID, const QStringList & list);
+    bool readExcludeContentConfig();
+    bool readConfig();
+    bool updateConfig();
 
 private slots:
-    void read_Data(quint16 msgID, QByteArray data);
-    void sendStatus();
-    void statusBranchSessionFinished(int sessionID);
-    void statusBranchSessionFailed(int sessionID);
+    void setNewBranchState();
+    void repoThreadFailed(Repo *repo, int threadSessionID);
+    void repoThreadWaiting(Repo *repo, int threadSessionID);
+    void repoThreadFinished(Repo *repo, int threadSessionID);
 
 };
 
+#endif // BRANCH_H
 
-#endif // BOXITINSTANCE_H

@@ -1,5 +1,6 @@
 /*
- *  Fuchs - Manjaro Repository Management
+ *  BoxIt - Manjaro Linux Repository Management Software
+ *  Roland Singer <roland@manjaro.org>
  *
  *  Copyright (C) 2007 Free Software Foundation, Inc.
  *

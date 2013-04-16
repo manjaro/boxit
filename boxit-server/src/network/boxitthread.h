@@ -1,5 +1,6 @@
 /*
- *  Fuchs - Manjaro Repository Management
+ *  BoxIt - Manjaro Linux Repository Management Software
+ *  Roland Singer <roland@manjaro.org>
  *
  *  Copyright (C) 2007 Free Software Foundation, Inc.
  *
@@ -30,7 +31,7 @@ class BoxitThread : public QThread
 {
     Q_OBJECT
 public:
-    explicit BoxitThread(int socketDescriptor, QObject *parent = 0);
+    explicit BoxitThread(const int socketDescriptor, const int sessionID, QObject *parent = 0);
     ~BoxitThread();
 
     void run();
@@ -39,7 +40,7 @@ signals:
     void error(QString errorString);
 
 private:
-    int socketDescriptor;
+    const int socketDescriptor, sessionID;
 
 };
 

@@ -21,26 +21,30 @@
 #include "boxitinstance.h"
 
 
-BoxitInstance::BoxitInstance()
+BoxitInstance::BoxitInstance(const int sessionID) :
+    BoxitSocket(sessionID),
+    tmpPath(QString(BOXIT_SESSION_TMP) + "/" + QString::number(sessionID))
 {
-    sendMessages = false;
-    poolLocked = false;
     loginCount = 0;
-    timeoutCount = 0;
-    timeOutTimer.setInterval(5000);
+    listenOnStatus = false;
+    syncSessionID = -1;
+
+    // Create tmp dir
+    cleanupTmpDir();
 
     // Connect signals and slots
     connect(this, SIGNAL(readData(quint16,QByteArray))  ,   this, SLOT(read_Data(quint16,QByteArray)));
-    connect(&timeOutTimer, SIGNAL(timeout())    ,   this, SLOT(timeOutDestroy()));
-    connect(&Pool::self, SIGNAL(message(QString)) ,   this, SLOT(sendMessage(QString)));
-    connect(&Pool::self, SIGNAL(finished(bool))   ,   this, SLOT(sendFinished(bool)));
-
-    timeOutTimer.start();
+    connect(&Status::self, SIGNAL(stateChanged())   ,   this, SLOT(sendStatus()));
+    connect(&Status::self, SIGNAL(branchSessionFailed(int))   ,   this, SLOT(statusBranchSessionFailed(int)));
+    connect(&Status::self, SIGNAL(branchSessionFinished(int))   ,   this, SLOT(statusBranchSessionFinished(int)));
 }
 
 
 
 BoxitInstance::~BoxitInstance() {
+    listenOnStatus = false;
+
+    // Close and remove file if it is still open
     if (file.isOpen()) {
         file.close();
         if (file.exists())
@@ -48,10 +52,24 @@ BoxitInstance::~BoxitInstance() {
         file.setFileName("");
     }
 
-    if (poolLocked) {
-        poolLocked = false;
-        Pool::unlock();
-    }
+    // Release session
+    Database::releaseSession(sessionID);
+
+    // Remove tmp path
+    if (QDir(tmpPath).exists() && !Global::rmDir(tmpPath))
+        cerr << "error: failed to remove session tmp path!" << endl;
+}
+
+
+
+void BoxitInstance::cleanupTmpDir() {
+    // Remove tmp path
+    if (QDir(tmpPath).exists() && !Global::rmDir(tmpPath))
+        cerr << "error: failed to remove session tmp path!" << endl;
+
+    // Create tmp path
+    if (!QDir().mkpath(tmpPath))
+        cerr << "error: failed to create session tmp path!" << endl;
 }
 
 
@@ -61,44 +79,7 @@ BoxitInstance::~BoxitInstance() {
 //###
 
 
-
-void BoxitInstance::sendFinished(bool success) {
-    if (!sendMessages)
-        return;
-
-    if (success)
-        sendData(MSG_PROCESS_FINISHED);
-    else
-        sendData(MSG_PROCESS_FAILED);
-}
-
-
-
-void BoxitInstance::sendMessage(QString msg) {
-    if (!sendMessages)
-        return;
-
-    sendData(MSG_MESSAGE, QByteArray(msg.toAscii()));
-}
-
-
-
-void BoxitInstance::timeOutDestroy() {
-    timeoutCount += 5;
-
-    if (timeoutCount >= 120) {
-        timeoutCount = 0;
-        disconnectFromHost();
-    }
-}
-
-
-
 void BoxitInstance::read_Data(quint16 msgID, QByteArray data) {
-    // Restart our timeout
-    timeoutCount = 0;
-
-
     //###
     //### Public accessible requests
     //###
@@ -129,11 +110,7 @@ void BoxitInstance::read_Data(quint16 msgID, QByteArray data) {
         }
 
         QStringList split = QString(data).split(BOXIT_SPLIT_CHAR);
-        if (split.size() < 2) {
-            sendData(MSG_ERROR);
-            return;
-        }
-        else if (!UserDatabase::loginUser(split.at(0), split.at(1), user)) {
+        if (split.size() < 2 || !UserDatabase::loginUser(split.at(0), split.at(1), user)) {
             sendData(MSG_ERROR);
             return;
         }
@@ -158,52 +135,217 @@ void BoxitInstance::read_Data(quint16 msgID, QByteArray data) {
 
 
     switch (msgID) {
-    case MSG_RESET_TIMEOUT:
+    case MSG_GET_BRANCHES:
     {
-        break;
-    }
-    case MSG_LOCK:
-    {
-        if (Pool::isLocked()) {
-            sendData(MSG_ERROR_POOL_ALREADY_LOCKED);
-            break;
+        QStringList branches = Database::getBranches();
+
+        foreach (QString branch, branches) {
+            sendData(MSG_DATA_BRANCH, QByteArray(branch.toAscii()));
         }
 
-        QStringList split;
-        if (!basicRepoChecks(data, split))
-            break;
+        sendData(MSG_SUCCESS);
+        break;
+    }
+    case MSG_GET_REPOS:
+    case MSG_GET_REPOS_WITH_PACKAGES:
+    {
+        QList<Database::RepoInfo> repos;
 
-        if (!RepoDB::lockPool(user.getUsername(), split.at(0), split.at(1))) {
+        if (!Database::getRepos(QString(data), repos)) {
             sendData(MSG_ERROR);
             break;
         }
 
-        poolLocked = true;
+        for (int i = 0; i < repos.size(); ++i) {
+            const Database::RepoInfo *repo = &repos.at(i);
+
+            // Send repository informations
+            QString str = repo->name;
+            str += BOXIT_SPLIT_CHAR + repo->architecture;
+            str += BOXIT_SPLIT_CHAR + repo->state;
+            str += BOXIT_SPLIT_CHAR + QString::number((int)repo->isSyncRepo);
+
+            sendData(MSG_DATA_REPO, QByteArray(str.toAscii()));
+
+            if (msgID == MSG_GET_REPOS_WITH_PACKAGES) {
+                // Send all overlay packages
+                sendStringList(MSG_DATA_OVERLAY_PACKAGES, repo->overlayPackages);
+
+                // Send all sync packages
+                sendStringList(MSG_DATA_SYNC_PACKAGES, repo->syncPackages);
+            }
+        }
+
         sendData(MSG_SUCCESS);
         break;
     }
-    case MSG_COMMIT:
+    case MSG_POOL_CHECK_FILES_EXISTS:
     {
-        if (!poolLocked) {
-            sendData(MSG_ERROR_POOL_NOT_LOCKED);
-            break;
-        }
+        QStringList missingFiles;
 
-        if (!Pool::commit())
+        if (!Database::checkPoolFilesExists(QString(data).split(BOXIT_SPLIT_CHAR, QString::SkipEmptyParts), missingFiles))
+            sendData(MSG_ERROR, QByteArray(missingFiles.join(BOXIT_SPLIT_CHAR).toAscii()));
+        else
+            sendData(MSG_SUCCESS);
+
+        break;
+    }
+    case MSG_LOCK_POOL_FILES:
+    {
+        if (!Database::lockPoolFiles(sessionID, user.getUsername(), QString(data).split(BOXIT_SPLIT_CHAR, QString::SkipEmptyParts)))
             sendData(MSG_ERROR);
         else
             sendData(MSG_SUCCESS);
 
         break;
     }
-    case MSG_REMOVE_PACKAGE:
-    {
-        if (!poolLocked) {
-            sendData(MSG_ERROR_POOL_NOT_LOCKED);
+    case MSG_MOVE_POOL_FILES: {
+        if (!Database::moveFilesToPool(sessionID, tmpPath, uploadedFiles)) {
+            sendData(MSG_ERROR);
             break;
         }
 
-        Pool::removeFile(QString(data).split("/", QString::SkipEmptyParts).last());
+        uploadedFiles.clear();
+
+        sendData(MSG_SUCCESS);
+        break;
+    }
+    case MSG_RELEASE_POOL_LOCK: {
+        Database::releasePoolLock(sessionID);
+        uploadedFiles.clear();
+
+        sendData(MSG_SUCCESS);
+        break;
+    }
+    case MSG_LOCK_REPO: {
+        QStringList list = QString(data).split(BOXIT_SPLIT_CHAR, QString::SkipEmptyParts);
+        if (list.size() < 3) {
+            sendData(MSG_ERROR);
+            break;
+        }
+
+        if (!Database::lockRepo(list.at(0), list.at(1), list.at(2), sessionID, user.getUsername())) {
+            sendData(MSG_ERROR);
+            break;
+        }
+
+        sendData(MSG_SUCCESS);
+        break;
+    }
+    case MSG_RELEASE_REPO_LOCK:
+    {
+        Database::releaseRepoLock(sessionID);
+
+        sendData(MSG_SUCCESS);
+        break;
+    }
+    case MSG_APPLY_REPO_CHANGES: {
+        QStringList split = QString(data).split("\n", QString::KeepEmptyParts);
+        if (split.size() < 3) {
+            sendData(MSG_ERROR);
+            break;
+        }
+
+        QStringList list = split.at(0).split(BOXIT_SPLIT_CHAR, QString::SkipEmptyParts);
+        QStringList addPackages = split.at(1).split(BOXIT_SPLIT_CHAR, QString::SkipEmptyParts);
+        QStringList removePackages = split.at(2).split(BOXIT_SPLIT_CHAR, QString::SkipEmptyParts);
+
+        if (list.size() < 3) {
+            sendData(MSG_ERROR);
+            break;
+        }
+
+        if (!Database::adjustRepoFiles(list.at(0), list.at(1), list.at(2), sessionID, addPackages, removePackages)) {
+            sendData(MSG_ERROR);
+            break;
+        }
+
+        sendData(MSG_SUCCESS);
+        break;
+    }
+    case MSG_LISTEN_ON_STATUS:
+    {
+        listenOnStatus = true;
+        sendData(MSG_SUCCESS);
+        sendStatus();
+        break;
+    }
+    case MSG_STOP_LISTEN_ON_STATUS:
+    {
+        listenOnStatus = false;
+
+        // Wait a little...
+        sleep(1);
+
+        sendData(MSG_SUCCESS);
+        break;
+    }
+    case MSG_SYNC_BRANCH:
+    {
+        if (!Database::synchronizeBranch(QString(data), user.getUsername(), syncSessionID)) {
+            syncSessionID = -1;
+            sendData(MSG_ERROR);
+            break;
+        }
+
+        sendData(MSG_SUCCESS);
+        break;
+    }
+    case MSG_GET_BRANCH_URL:
+    {
+        QString url;
+
+        if (!Database::getBranchUrl(QString(data), url)) {
+            sendData(MSG_ERROR);
+            break;
+        }
+
+        sendData(MSG_SUCCESS, QByteArray(url.toAscii()));
+        break;
+    }
+    case MSG_SET_BRANCH_URL:
+    {
+        QStringList split = QString(data).split(BOXIT_SPLIT_CHAR, QString::SkipEmptyParts);
+        if (split.size() < 2) {
+            sendData(MSG_ERROR);
+            break;
+        }
+
+        if (!Database::setBranchUrl(split.at(0), split.at(1))) {
+            sendData(MSG_ERROR);
+            break;
+        }
+
+        sendData(MSG_SUCCESS);
+        break;
+    }
+    case MSG_GET_BRANCH_SYNC_EXCLUDE_FILES:
+    {
+        QString excludeFiles;
+
+        if (!Database::getBranchSyncExcludeFiles(QString(data), excludeFiles)) {
+            sendData(MSG_ERROR);
+            break;
+        }
+
+        sendData(MSG_SUCCESS, QByteArray(excludeFiles.toAscii()));
+        break;
+    }
+    case MSG_SET_BRANCH_SYNC_EXCLUDE_FILES:
+    {
+        QStringList split = QString(data).split(BOXIT_SPLIT_CHAR, QString::KeepEmptyParts);
+        if (split.size() < 2) {
+            sendData(MSG_ERROR);
+            break;
+        }
+
+        QString branchName = split.at(0);
+        split.removeFirst();
+
+        if (!Database::setBranchSyncExcludeFiles(branchName, split.join(BOXIT_SPLIT_CHAR))) {
+            sendData(MSG_ERROR);
+            break;
+        }
 
         sendData(MSG_SUCCESS);
         break;
@@ -221,11 +363,7 @@ void BoxitInstance::read_Data(quint16 msgID, QByteArray data) {
     }
     case MSG_FILE_UPLOAD:
     {
-        if (!poolLocked) {
-            sendData(MSG_ERROR_POOL_NOT_LOCKED);
-            break;
-        }
-        else if (fileCheckSum.isEmpty()) {
+        if (fileCheckSum.isEmpty()) {
             sendData(MSG_ERROR);
             break;
         }
@@ -237,20 +375,27 @@ void BoxitInstance::read_Data(quint16 msgID, QByteArray data) {
             file.setFileName("");
         }
 
-        file.setFileName(Global::getConfig().poolDir + "/" + QString(data).split("/", QString::SkipEmptyParts).last());
 
-        // Check if file exists and compare the checksums. Remove if different...
-        if (file.exists()) {
-            // Because this could lead to broken database files with invalid checksum, this is commented.
-            /*if (fileCheckSum != sha1CheckSum(file.fileName())) {
-                file.remove();
+        QString fileName = QString(data).split("/", QString::SkipEmptyParts).last();
+        QByteArray poolFileCheckSum;
+
+        // Check if file already exists
+        if (Database::getPoolFileCheckSum(fileName, poolFileCheckSum)) {
+            if (fileCheckSum != poolFileCheckSum) {
+                sendData(MSG_FILE_ALREADY_EXISTS_WRONG_CHECKSUM);
+                break;
             }
-            else {*/
-                Pool::addFile(file.fileName().split("/", QString::SkipEmptyParts).last());
+            else {
                 sendData(MSG_FILE_ALREADY_EXISTS);
                 break;
-            //}
+            }
         }
+
+        file.setFileName(tmpPath + "/" + fileName);
+
+        // Check if file already exists and remove it from the tmp path if required
+        if (file.exists())
+            file.remove();
 
         if (!file.open(QIODevice::WriteOnly)) {
             sendData(MSG_ERROR);
@@ -277,307 +422,21 @@ void BoxitInstance::read_Data(quint16 msgID, QByteArray data) {
         }
 
         file.close();
-        Global::fixFilePermission(file.fileName());
 
-        if (fileCheckSum != sha1CheckSum(file.fileName())) {
+        if (fileCheckSum != Global::sha1CheckSum(file.fileName())) {
             fileCheckSum.clear();
             file.remove();
             file.setFileName("");
-            sendData(MSG_ERROR_CHECKSUM_WRONG);
+            sendData(MSG_ERROR_WRONG_CHECKSUM);
             break;
         }
 
-        Pool::addFile(file.fileName().split("/", QString::SkipEmptyParts).last());
+        // Add to list
+        uploadedFiles.append(file.fileName().split("/", QString::SkipEmptyParts).last());
+
         fileCheckSum.clear();
         file.setFileName("");
         sendData(MSG_SUCCESS);
-        break;
-    }
-    case MSG_UNLOCK:
-    {
-        if (!poolLocked) {
-            sendData(MSG_ERROR_POOL_NOT_LOCKED);
-            break;
-        }
-
-        Pool::unlock();
-        sendData(MSG_SUCCESS);
-        break;
-    }
-    //###
-    //### Section without a repo lock required
-    //###
-    case MSG_REPOSITORY_STATE:
-    {
-        QStringList split;
-        if (!basicRepoChecks(data, split))
-            break;
-
-        QString state;
-        if (!RepoDB::getRepoState(split.at(0), split.at(1), state)) {
-            sendData(MSG_ERROR);
-            break;
-        }
-
-        sendData(MSG_SUCCESS, QByteArray(state.toAscii()));
-        break;
-    }
-    case MSG_POOL_STATE:
-    {
-        sendData(MSG_SUCCESS, QByteArray(QString(Pool::getJob() + BOXIT_SPLIT_CHAR + Pool::getState() + BOXIT_SPLIT_CHAR + Pool::getUsername()).toAscii()));
-        break;
-    }
-    case MSG_REQUEST_PROCESS_STATE:
-    {
-        if (Pool::isProcessRunning())
-            sendData(MSG_PROCESS_RUNNING);
-        else if (Pool::isProcessSuccess())
-            sendData(MSG_PROCESS_FINISHED);
-        else
-            sendData(MSG_PROCESS_FAILED);
-
-        break;
-    }
-    case MSG_PACKAGE_LIST:
-    {
-        QStringList split;
-        if (!basicRepoChecks(data, split))
-            break;
-
-        QStringList packages;
-        if (!RepoDB::getRepoPackages(split.at(0), split.at(1), packages)) {
-            sendData(MSG_ERROR);
-            break;
-        }
-
-        for (int i = 0; i < packages.size(); ++i)
-            sendData(MSG_PACKAGE, QByteArray(packages.at(i).toAscii()));
-
-        sendData(MSG_SUCCESS);
-        break;
-    }
-    case MSG_SIGNATURE_LIST:
-    {
-        QStringList split;
-        if (!basicRepoChecks(data, split))
-            break;
-
-        QStringList signatures;
-        if (!RepoDB::getRepoSignatures(split.at(0), split.at(1), signatures)) {
-            sendData(MSG_ERROR);
-            break;
-        }
-
-        for (int i = 0; i < signatures.size(); ++i)
-            sendData(MSG_SIGNATURE, QByteArray(signatures.at(i).toAscii()));
-
-        sendData(MSG_SUCCESS);
-        break;
-    }
-    case MSG_SET_PASSWD:
-    {
-        QStringList split = QString(data).split(QString(BOXIT_SPLIT_CHAR), QString::SkipEmptyParts);
-
-        if (split.size() < 2) {
-            sendData(MSG_ERROR);
-            break;
-        }
-        else if (!user.comparePassword(split.at(0))) {
-            sendData(MSG_ERROR_WRONG_PASSWORD);
-            break;
-        }
-        else if (!user.setPassword(split.at(1)) || !UserDatabase::setUserData(user)) {
-            sendData(MSG_ERROR);
-            break;
-        }
-
-        sendData(MSG_SUCCESS);
-        break;
-    }
-    case MSG_REQUEST_LIST:
-    {
-        QList<RepoDB::RepoInfo> infos = RepoDB::getRepoList();
-
-        for (int i = 0; i < infos.size(); ++i) {
-            RepoDB::RepoInfo &info = infos[i];
-            sendData(MSG_LIST_REPO, QByteArray(QString(info.name + BOXIT_SPLIT_CHAR + info.architecture).toAscii()));
-        }
-
-        sendData(MSG_SUCCESS);
-        break;
-    }
-    case MSG_REPO_ADD:
-    {
-        QStringList split = QString(data).split(QString(BOXIT_SPLIT_CHAR), QString::SkipEmptyParts);
-
-        if (split.size() < 2) {
-            sendData(MSG_ERROR);
-            break;
-        }
-        else if (RepoDB::repoExists(split.at(0), split.at(1))) {
-            sendData(MSG_ERROR_ALREADY_EXIST);
-            break;
-        }
-        else if (RepoDB::repoIsBusy(split.at(0), split.at(1))) {
-            sendData(MSG_ERROR_IS_BUSY);
-            break;
-        }
-        else if (!RepoDB::createRepo(split.at(0), split.at(1))) {
-            sendData(MSG_ERROR);
-            break;
-        }
-
-        sendData(MSG_SUCCESS);
-        break;
-    }
-    case MSG_REPO_GET_SYNC_URL:
-    {
-        QStringList split;
-        if (!basicRepoChecks(data, split))
-            break;
-
-        QString syncURL;
-        if (!RepoDB::getRepoSyncURL(split.at(0), split.at(1), syncURL)) {
-            sendData(MSG_ERROR);
-            break;
-        }
-
-        sendData(MSG_SUCCESS, QByteArray(syncURL.toAscii()));
-        break;
-    }
-    case MSG_REPO_CHANGE_SYNC_URL:
-    {
-        QStringList split;
-        if (!basicRepoChecks(data, split, 3))
-            break;
-
-        if (!split.at(2).contains("@") || !RepoDB::changeRepoSyncURL(split.at(0), split.at(1), split.at(2))) {
-            sendData(MSG_ERROR);
-            break;
-        }
-
-        sendData(MSG_SUCCESS);
-        break;
-    }
-    case MSG_REPO_MERGE:
-    {
-        QStringList split;
-        if (!basicRepoChecks(data, split, 3))
-            break;
-
-        if (!RepoDB::repoExists(split.at(2), split.at(1))) {
-            sendData(MSG_ERROR_NOT_EXIST);
-            break;
-        }
-        else if (RepoDB::repoIsBusy(split.at(2), split.at(1))) {
-            sendData(MSG_ERROR_IS_BUSY);
-            break;
-        }
-        else if (Pool::isLocked()) {
-            sendData(MSG_ERROR_POOL_ALREADY_LOCKED);
-            break;
-        }
-
-        if (!RepoDB::mergeRepos(user.getUsername(), split.at(0), split.at(2), split.at(1))) {
-            sendData(MSG_ERROR);
-            break;
-        }
-
-        sendData(MSG_SUCCESS);
-        break;
-    }
-    case MSG_REPO_SYNC:
-    {
-        QStringList split;
-        if (!basicRepoChecks(data, split))
-            break;
-
-        if (Pool::isLocked()) {
-            sendData(MSG_ERROR_POOL_ALREADY_LOCKED);
-            break;
-        }
-
-        QString syncURL, customSyncPackages;
-        if (!RepoDB::getRepoSyncURL(split.at(0), split.at(1), syncURL)) {
-            sendData(MSG_ERROR);
-            break;
-        }
-
-        if (syncURL.isEmpty()) {
-            sendData(MSG_ERROR_NO_SYNC_REPO);
-            break;
-        }
-
-        if (split.size() >= 3)
-            customSyncPackages = split.at(2);
-
-        if (!RepoDB::repoSync(user.getUsername(), split.at(0), split.at(1), customSyncPackages)) {
-            sendData(MSG_ERROR);
-            break;
-        }
-
-        sendData(MSG_SUCCESS);
-        break;
-    }
-    case MSG_GET_EXCLUDE_CONTENT:
-    {
-        QStringList split;
-        if (!basicRepoChecks(data, split))
-            break;
-
-        QString content;
-        if (!RepoDB::getRepoExcludeContent(split.at(0), split.at(1), content)) {
-            sendData(MSG_ERROR);
-            break;
-        }
-
-        sendData(MSG_SUCCESS, QByteArray(content.toAscii()));
-        break;
-    }
-    case MSG_SET_EXCLUDE_CONTENT:
-    {
-        QStringList split;
-        if (!basicRepoChecks(data, split))
-            break;
-
-        // It could be, that the content contains our boxit split char...
-        QString repo = split.at(0);
-        QString arch = split.at(1);
-        split.removeFirst();
-        split.removeFirst();
-
-        if (!RepoDB::setRepoExcludeContent(repo, arch, split.join(BOXIT_SPLIT_CHAR))) {
-            sendData(MSG_ERROR);
-            break;
-        }
-
-        sendData(MSG_SUCCESS);
-        break;
-    }
-    case MSG_KILL:
-    {
-        if (!Pool::isLocked()) {
-            sendData(MSG_ERROR_NOT_BUSY);
-            break;
-        }
-        else if (!RepoDB::poolKillThread()) {
-            sendData(MSG_ERROR);
-            break;
-        }
-
-        sendData(MSG_SUCCESS);
-        break;
-    }
-    case MSG_GET_POOL_MESSAGES:
-    {
-        sendData(MSG_SUCCESS, QByteArray(RepoDB::poolMessageHistory().toAscii()));
-        sendMessages = true;
-        break;
-    }
-    case MSG_STOP_POOL_MESSAGES:
-    {
-        sendMessages = false;
-        sendData(MSG_PROCESS_BACKGROUND);
         break;
     }
     default:
@@ -596,41 +455,93 @@ void BoxitInstance::read_Data(quint16 msgID, QByteArray data) {
 //###
 
 
+void BoxitInstance::sendStringList(const quint16 msgID, const QStringList & list) {
+    QString data;
+    int count = 0;
 
-bool BoxitInstance::basicRepoChecks(QByteArray &data, QStringList &split, int minimumLenght) {
-    split = QString(data).split(QString(BOXIT_SPLIT_CHAR), QString::SkipEmptyParts);
-
-    if (minimumLenght < 2)
-        minimumLenght = 2;
-
-    if (split.size() < minimumLenght) {
-        sendData(MSG_ERROR);
-        return false;
-    }
-    else if (!RepoDB::repoExists(split.at(0), split.at(1))) {
-        sendData(MSG_ERROR_NOT_EXIST);
-        return false;
-    }
-    else if (RepoDB::repoIsBusy(split.at(0), split.at(1))) {
-        sendData(MSG_ERROR_IS_BUSY);
-        return false;
+    foreach (const QString item, list) {
+        if (count < 50) {
+            data.append(item + BOXIT_SPLIT_CHAR);
+            ++count;
+        }
+        else {
+            count = 0;
+            data.append(item);
+            sendData(msgID, QByteArray(data.toAscii()));
+            data.clear();
+        }
     }
 
-    return true;
+    if (!data.isEmpty()) {
+        if (data.endsWith(BOXIT_SPLIT_CHAR))
+            data.remove(data.size() - 1, 1);
+
+        sendData(msgID, QByteArray(data.toAscii()));
+    }
 }
 
 
 
-QByteArray BoxitInstance::sha1CheckSum(QString filePath) {
-    QCryptographicHash crypto(QCryptographicHash::Sha1);
-    QFile file(filePath);
+void BoxitInstance::sendStatus() {
+    QMutexLocker locker(&statusMutex);
 
-    if (!file.open(QFile::ReadOnly))
-        return QByteArray();
+    if (!listenOnStatus)
+        return;
 
-    while(!file.atEnd()){
-        crypto.addData(file.read(8192));
+    QList<Status::BranchStatus> branches = Status::getBranchesStatus();
+    QList<Status::RepoStatus> repos = Status::getReposStatus();
+
+    sendData(MSG_DATA_NEW_STATUS_LIST);
+
+    // Send branch status
+    for (int i = 0; i < branches.size(); ++i) {
+        const Status::BranchStatus *branch = &branches.at(i);
+
+        QStringList list;
+        list << branch->name;
+        list << branch->job;
+        list << QString::number((int)(branch->state == Status::STATE_FAILED));
+        list << branch->error;
+
+        sendData(MSG_DATA_BRANCH_STATUS, QByteArray(list.join(BOXIT_SPLIT_CHAR).toAscii()));
     }
 
-    return crypto.result();
+    // Send repo status
+    for (int i = 0; i < repos.size(); ++i) {
+        const Status::RepoStatus *repo = &repos.at(i);
+
+        QStringList list;
+        list << repo->branchName;
+        list << repo->name;
+        list << repo->architecture;
+        list << repo->job;
+        list << QString::number((int)(repo->state == Status::STATE_FAILED));
+        list << repo->error;
+
+        sendData(MSG_DATA_REPO_STATUS, QByteArray(list.join(BOXIT_SPLIT_CHAR).toAscii()));
+    }
+
+    sendData(MSG_DATA_END_STATUS_LIST);
+}
+
+
+
+void BoxitInstance::statusBranchSessionFinished(int sessionID) {
+    QMutexLocker locker(&statusMutex);
+
+    if (!listenOnStatus || (this->sessionID != sessionID && this->syncSessionID != sessionID))
+        return;
+
+    sendData(MSG_STATUS_SESSION_FINISHED);
+}
+
+
+
+void BoxitInstance::statusBranchSessionFailed(int sessionID) {
+    QMutexLocker locker(&statusMutex);
+
+    if (!listenOnStatus || (this->sessionID != sessionID && this->syncSessionID != sessionID))
+        return;
+
+    sendData(MSG_STATUS_SESSION_FAILED);
 }

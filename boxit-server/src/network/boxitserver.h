@@ -1,5 +1,6 @@
 /*
- *  Fuchs - Manjaro Repository Management
+ *  BoxIt - Manjaro Linux Repository Management Software
+ *  Roland Singer <roland@manjaro.org>
  *
  *  Copyright (C) 2007 Free Software Foundation, Inc.
  *
@@ -26,6 +27,7 @@
 #include <iostream>
 #include "const.h"
 #include "boxitthread.h"
+#include "global.h"
 
 using namespace std;
 
@@ -40,10 +42,6 @@ public:
 
 protected:
     void incomingConnection(int socketDescriptor);
-
-signals:
-
-public slots:
 
 };
 

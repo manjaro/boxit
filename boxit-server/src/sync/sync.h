@@ -21,7 +21,7 @@
 #ifndef SYNC_H
 #define SYNC_H
 
-#include <QObject>
+#include <QThread>
 #include <QString>
 #include <QList>
 #include <QStringList>
@@ -31,42 +31,59 @@
 #include <QEventLoop>
 #include <QProcess>
 #include <QRegExp>
+#include <iostream>
+
 #include "download.h"
 #include "const.h"
 #include "global.h"
 #include "sha256/cryptsha256.h"
+#include "db/branch.h"
+#include "db/repo.h"
+#include "db/status.h"
+
+using namespace std;
 
 
 
-class Sync : public QObject
+class Sync : public QThread
 {
     Q_OBJECT
 public:
-    explicit Sync(const QString destPath, QObject *parent = 0);
+    explicit Sync(QObject *parent = 0);
     ~Sync();
 
-    bool synchronize(QString url, const QString repoName, const QString excludeFilePath, QStringList &allDBPackages, QStringList &addedFiles, QStringList checkFilePaths = QStringList(), QStringList onlyFiles = QStringList());
-
-signals:
-    void error(QString errorStr);
-    void status(int index, int total);
+    void abort();
+    int start(const QString username, Branch *branch);
+    QString lastErrorMessage() { return errorMessage; }
 
 private:
     struct Package {
-        QString packageName, fileName, sha256sum;
+        QString packageName, fileName, sha256sum, url;
         bool downloadSignature, downloadPackage;
     };
 
-    const QString destPath;
-    Download download;
-    QList<Package> packages;
-    bool busy;
+    struct SyncRepo {
+        Repo *repo;
+        QStringList addPackages, removePackages;
+    };
 
+
+    Branch *branch;
+    const QString tmpPath;
+    int sessionID;
+    QString errorMessage;
+
+    void run();
+    bool downloadSyncPackages(const QList<Package> & downloadPackages);
+    bool getDownloadSyncPackages(QString url, const QString repoName, const QStringList & excludeFiles, QList<Package> & downloadPackages, QStringList & dbPackages);
+    void cleanupTmpDir();
     bool downloadFile(QString url);
-    bool fillPackagesList(const QString repoName);
-    bool fileAlreadyExist(Package &package, const QStringList &checkFilePaths);
-    bool readExcludeFile(const QString filePath, QStringList &patterns);
+    bool fillPackagesList(const QString repoName, QList<Package> & packages);
     bool matchWithWildcard(const QString &str, const QStringList &list);
+
+signals:
+    void status(int index, int total);
+
 };
 
 #endif // SYNC_H

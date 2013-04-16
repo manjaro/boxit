@@ -1,5 +1,6 @@
 /*
- *  Fuchs - Manjaro Repository Management
+ *  BoxIt - Manjaro Linux Repository Management Software
+ *  Roland Singer <roland@manjaro.org>
  *
  *  Copyright (C) 2007 Free Software Foundation, Inc.
  *
@@ -20,8 +21,10 @@
 #include "boxitthread.h"
 
 
-BoxitThread::BoxitThread(int socketDescriptor, QObject *parent) :
-    QThread(parent), socketDescriptor(socketDescriptor)
+BoxitThread::BoxitThread(const int socketDescriptor, const int sessionID, QObject *parent) :
+    QThread(parent),
+    socketDescriptor(socketDescriptor),
+    sessionID(sessionID)
 {
 }
 
@@ -33,7 +36,8 @@ BoxitThread::~BoxitThread() {
 
 
 void BoxitThread::run() {
-    BoxitInstance boxitSocket;
+    BoxitInstance boxitSocket(sessionID);
+
     if (!boxitSocket.setSocketDescriptor(socketDescriptor))
         return;
 

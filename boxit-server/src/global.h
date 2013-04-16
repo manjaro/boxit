@@ -1,4 +1,5 @@
 /*
+ *
  *  BoxIt - Manjaro Linux Repository Management Software
  *  Roland Singer <roland@manjaro.org>
  *
@@ -30,6 +31,9 @@
 #include <QStringList>
 #include <QFileInfo>
 #include <QTextStream>
+#include <QCryptographicHash>
+#include <QMutex>
+#include <QMutexLocker>
 #include "const.h"
 #include <sys/stat.h>
 
@@ -39,13 +43,15 @@ class Global
 {
 public:
     struct Config {
-        QString salt, sslCertificate, sslKey, repoDir, poolDir;
+        QString salt, sslCertificate, sslKey, repoDir, syncPoolDir, overlayPoolDir;
         QStringList mailingListEMails;
     };
 
+    static int getNewUniqueSessionID();
     static QString getNameofPKG(QString pkg);
     static QString getVersionofPKG(QString pkg);
-    static bool fixFilePermission(QString file) ;
+    static bool fixFilePermission(QString file);
+    static QByteArray sha1CheckSum(QString filePath);
     static bool sendMemoEMail(QString username, QString repository, QString architecture, QStringList addedFiles, QStringList removedFiles);
     static bool sendEMail(QString subject, QString to, QString text);
     static bool rmDir(QString path, bool onlyHidden = false, bool onlyContent = false);
@@ -55,6 +61,9 @@ public:
 
 private:
     static Config config;
+    static int lastSessionID;
+    static QMutex newSessionIDMutex;
+
 };
 
 #endif // GLOBAL_H

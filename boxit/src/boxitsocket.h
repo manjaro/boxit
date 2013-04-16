@@ -43,8 +43,8 @@ public:
     void disconnectFromHost();
     bool readData(quint16 &msgID);
     bool readData(quint16 &msgID, QByteArray &data);
-    bool sendData(quint16 msgID);
-    bool sendData(quint16 msgID, QByteArray data);
+    void sendData(quint16 msgID);
+    void sendData(quint16 msgID, QByteArray data);
 
 private slots:
     void hostDisconnected();

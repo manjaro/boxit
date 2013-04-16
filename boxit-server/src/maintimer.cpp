@@ -27,29 +27,21 @@ MainTimer::MainTimer(QObject *parent) :
 }
 
 
+
+MainTimer::~MainTimer() {
+    if (isRunning()) {
+        terminate();
+        wait();
+    }
+}
+
+
+
 void MainTimer::run() {
     while (true) {
-        QString poolDir = Global::getConfig().poolDir;
+        Database::removeOrphanPoolFiles();
 
-        if (Pool::lock()) {
-            // Check for old packages in pool
-            QStringList list = QDir(poolDir).entryList(QDir::Files | QDir::NoDotAndDotDot);
-
-            // Get only orphan files
-            RepoDB::removeFilesWhichExistsInReposFromList(list);
-
-            for (int i = 0; i < list.size(); ++i) {
-                // Check when it was last modified
-                QString filePath = poolDir + "/" + list.at(i);
-                QFileInfo info(filePath);
-
-                if (info.lastModified().daysTo(QDateTime::currentDateTime()) >= BOXIT_REMOVE_ORPHANS_AFTER_DAYS)
-                    QFile::remove(filePath);
-            }
-
-            Pool::unlock();
-        }
-
+        // Wait 3 hours
         sleep(10800);
     }
 }

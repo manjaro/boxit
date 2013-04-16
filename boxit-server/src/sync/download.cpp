@@ -33,7 +33,7 @@ Download::Download(const QString destPath, QObject *parent) :
 
 
 Download::~Download() {
-    cancle();
+    cancel();
 }
 
 
@@ -82,23 +82,23 @@ bool Download::isActive() {
 
 
 
-void Download::cancle() {
-    if (!busy || reply == NULL)
+void Download::cancel() {
+    if (!busy || !reply)
         return;
+
+    busy = false;
+    error = true;
+    errorStr = "download canceled!";
+
+    reply->abort();
+    reply->deleteLater();
+    reply = NULL;
 
     if (file.isOpen())
         file.close();
 
     if (file.exists())
         file.remove();
-
-    busy = false;
-    error = true;
-    errorStr = "download cancled!";
-
-    reply->abort();
-    reply->deleteLater();
-    reply = NULL;
 
     emit finished(false);
 }
@@ -111,7 +111,7 @@ QString Download::lastError() {
 
 
 
-bool Download::isError() {
+bool Download::hasError() {
     return error;
 }
 
@@ -162,7 +162,7 @@ void Download::readyRead() {
     if (file.isOpen())
         file.write(reply->readAll());
     else
-        cancle();
+        cancel();
 }
 
 

@@ -20,138 +20,83 @@
 
 #include "sync.h"
 
-Sync::Sync(const QString destPath, QObject *parent) :
-    QObject(parent),
-    destPath(destPath),
-    download(destPath, this)
+
+Sync::Sync(QObject *parent) :
+    QThread(parent),
+    tmpPath(QString(BOXIT_SESSION_TMP) + "/sync_session")
 {
-    busy = false;
+    branch = NULL;
+    sessionID = -1;
+
+    // Create tmp folder
+    cleanupTmpDir();
 }
 
 
 
 Sync::~Sync() {
-    download.cancle();
+    abort();
+
+    // Remove tmp path
+    if (QDir(tmpPath).exists() && !Global::rmDir(tmpPath))
+        cerr << "error: failed to remove sync session tmp path!" << endl;
 }
 
 
 
-bool Sync::synchronize(QString url, const QString repoName, const QString excludeFilePath, QStringList &allDBPackages, QStringList &addedFiles, QStringList checkFilePaths, QStringList onlyFiles) {
-    QStringList patterns;
-    QList<Package> downloadPackages;
+void Sync::abort() {
+    if (!isRunning())
+        return;
 
-    if (busy) {
-        emit error("A synchronization process is already running!");
-        return false;
-    }
+    terminate();
+    wait();
 
-    busy = true;
+    // Unlock all locked repositories by this session ID
+    if (branch) {
+        for (int i = 0; i < branch->repos.size(); ++i) {
+            Repo *repo = branch->repos[i];
 
-    // Init
-    if (url.isEmpty() || !QDir(destPath).exists())
-        goto error;
-
-    if (url.mid(url.length() - 1, 1) != "/")
-        url += "/";
-
-
-    // First download the database...
-    if (!downloadFile(url + repoName + BOXIT_DB_ENDING))
-        goto error; // Error messages are emited by the method...
-
-    // Fill the packages list
-    if (!fillPackagesList(repoName))
-        goto error; // Error messages are emited by the method...
-
-    // Remove database file again
-    QFile::remove(destPath + "/" + repoName + BOXIT_DB_ENDING); // Error isn't important
-
-
-    // Add our destination path to the check list to check if the file already exist
-    checkFilePaths.append(destPath);
-    checkFilePaths.removeDuplicates();
-
-
-    // Check if packages in onlyFiles list exist in the database
-    if (!onlyFiles.isEmpty()) {
-        for (int x = 0; x < onlyFiles.size(); ++x) {
-            QString currentPackage = onlyFiles.at(x);
-            bool found = false;
-
-            for (int i = 0; i < packages.size(); ++i) {
-                if (packages.at(i).packageName == currentPackage) {
-                    found = true;
-                    break;
-                }
-            }
-
-            if (!found) {
-                emit error(QString("Selected package '%1' doesn't exist in database!").arg(currentPackage));
-                goto error;
-            }
+            if (repo->getLockedSessionID() == sessionID)
+                repo->unlock();
         }
     }
+}
 
 
-    // Read exclude file
-    if (!readExcludeFile(excludeFilePath, patterns))
-        goto error; // Error messages are emited by the method...
 
+int Sync::start(const QString username, Branch *branch) {
+    if (isRunning())
+        return -1;
 
-    // Create a list only with the packages to download
-    for (int i = 0; i < packages.size(); ++i) {
-        Package package = packages.at(i);
+    errorMessage.clear();
+    this->branch = branch;
+    this->sessionID = Global::getNewUniqueSessionID();
 
-        // Check if the file is blacklisted, but only if this isn't excplicit forced by the user
-        if (onlyFiles.isEmpty() && matchWithWildcard(package.packageName, patterns))
-            continue;
-
-        allDBPackages.append(package.fileName);
-
-        if (!onlyFiles.isEmpty() && !onlyFiles.contains(package.packageName))
-            continue;
-
-        addedFiles.append(package.fileName);
-
-        // Check if file already exists
-        if (fileAlreadyExist(package, checkFilePaths))
-            continue;
-
-        downloadPackages.append(package);
+    // Check if a repository is already locked
+    for (int i = 0; i < branch->repos.size(); ++i) {
+        if (branch->repos[i]->isLocked())
+            return -1;
     }
 
+    // Try to lock repositories
+    for (int i = 0; i < branch->repos.size(); ++i) {
+        if (branch->repos[i]->lock(sessionID, username))
+            continue;
 
-    // Download each file
-    for (int i = 0; i < downloadPackages.size(); ++i) {
-        // Update status
-        emit status(i + 1, downloadPackages.size());
+        // Unlock all locked repositories by this session ID on error
+        for (int i = 0; i < branch->repos.size(); ++i) {
+            Repo *repo = branch->repos[i];
 
-        Package package = downloadPackages.at(i);
-
-        // Download file...
-        if (package.downloadPackage) {
-            if (!downloadFile(url + package.fileName))
-                goto error; // Error messages are emited by the method...
-
-            // Check if package checksum is ok
-            if (CryptSHA256::sha256CheckSum(destPath + "/" + package.fileName) != package.sha256sum) {
-                emit error(QString("Package checksum doesn't match for package '%1'!").arg(package.fileName));
-                goto error;
-            }
+            if (repo->getLockedSessionID() == sessionID)
+                repo->unlock();
         }
 
-        // Download signature file...
-        if (package.downloadSignature && !downloadFile(url + package.fileName + BOXIT_SIGNATURE_ENDING))
-            // Error isn't fatal
-            emit error(QString("warning: package '%1' doesn't has a signature!").arg(package.fileName));
+        return -1;
     }
 
-    busy = false;
-    return true;
+    QThread::start();
 
-error:
-    busy = false;
-    return false;
+    return this->sessionID;
 }
 
 
@@ -161,20 +106,263 @@ error:
 //###
 
 
+void Sync::run() {
+    // Update state
+    Status::setBranchStateChanged(branch->name, "synchronizing packages", "", Status::STATE_RUNNING);
+
+    // Wait a little to be sure the remote client is ready
+    sleep(2);
+
+    QList<Package> downloadPackages;
+    QList<SyncRepo> syncRepos;
+    bool noCommits = true;
+
+    // Clean up tmp folder
+    cleanupTmpDir();
+
+    for (int i = 0; i < branch->repos.size(); ++i) {
+        Repo *repo = branch->repos[i];
+
+        // Skip if this is not a sync repo
+        if (!repo->isSyncable())
+            continue;
+
+        QString url = branch->getUrl();
+        url.replace("$branch", branch->name);
+        url.replace("$repo", repo->getName());
+        url.replace("$arch", repo->getArchitecture());
+
+        QStringList dbPackages;
+        SyncRepo syncRepo;
+        syncRepo.repo = repo;
+
+        // Get all packages to download
+        if (!getDownloadSyncPackages(url, repo->getName(), branch->getExcludeFiles(), downloadPackages, dbPackages))
+            goto error;
+
+
+        QStringList repoSyncPackages = repo->getSyncPackages();
+
+        // Get packages to add
+        foreach (const QString package, dbPackages) {
+            if (repoSyncPackages.contains(package))
+                continue;
+
+            syncRepo.addPackages.append(package);
+        }
+
+        // Get packages to remove
+        foreach (const QString package, repoSyncPackages) {
+            if (dbPackages.contains(package))
+                continue;
+
+            syncRepo.removePackages.append(package);
+        }
+
+        // Add to list
+        syncRepos.append(syncRepo);
+    }
+
+
+    // Download all packages
+    if (!downloadSyncPackages(downloadPackages))
+        goto error;
+
+
+    // Update state
+    Status::setBranchStateChanged(branch->name, "committing changes", "", Status::STATE_RUNNING);
+
+
+    // Commit changes
+    for (int i = 0; i < syncRepos.size(); ++i) {
+        SyncRepo *syncRepo = &syncRepos[i];
+
+        // Skip if nothing is to do
+        if (syncRepo->addPackages.isEmpty() && syncRepo->removePackages.isEmpty())
+            continue;
+
+        if (!syncRepo->repo->adjustPackages(syncRepo->addPackages, syncRepo->removePackages, true))
+            goto error;
+
+        noCommits = false;
+    }
+
+    // Unlock all locked repositories by this session ID
+    for (int i = 0; i < branch->repos.size(); ++i) {
+        Repo *repo = branch->repos[i];
+
+        if (repo->getLockedSessionID() == sessionID)
+            repo->unlock();
+    }
+
+    // Update state
+    Status::setBranchStateChanged(branch->name, "finished synchronization", "", Status::STATE_SUCCESS);
+
+    // If no commits have been done, then manually trigger signal
+    if (noCommits)
+        Status::branchSessionChanged(sessionID, true);
+
+    branch = NULL;
+    return;
+
+error:
+
+    // Unlock all locked repositories by this session ID
+    for (int i = 0; i < branch->repos.size(); ++i) {
+        Repo *repo = branch->repos[i];
+
+        if (repo->getLockedSessionID() == sessionID)
+            repo->unlock();
+    }
+
+    // Update state
+    Status::setBranchStateChanged(branch->name, "synchronization failed", errorMessage, Status::STATE_FAILED);
+
+    // If no commits have been done, then manually trigger signal
+    if (noCommits)
+        Status::branchSessionChanged(sessionID, false);
+
+    branch = NULL;
+}
+
+
+
+bool Sync::downloadSyncPackages(const QList<Package> & downloadPackages) {
+    const QString syncPath = Global::getConfig().syncPoolDir;
+
+    // Download each file
+    for (int i = 0; i < downloadPackages.size(); ++i) {
+        const Package *package = &downloadPackages.at(i);
+
+        // Update status
+        emit status(i + 1, downloadPackages.size());
+        Status::setBranchStateChanged(branch->name, "synchronizing packages [" + QString::number(i + 1) + "/" + QString::number(downloadPackages.size()) + "]", "", Status::STATE_RUNNING);
+
+        // Download file...
+        if (package->downloadPackage) {
+            if (!downloadFile(package->url + package->fileName))
+                return false;
+
+            // Check if package checksum is ok
+            if (CryptSHA256::sha256CheckSum(tmpPath + "/" + package->fileName) != package->sha256sum) {
+                errorMessage = QString("error: package checksum doesn't match for package '%1'!").arg(package->fileName);
+                return false;
+            }
+
+            // Move file to sync pool directory
+            if (!QDir().rename(tmpPath + "/" + package->fileName, syncPath + "/" + package->fileName)) {
+                errorMessage = QString("error: failed to move file '%1' to sync folder!").arg(package->fileName);
+                return false;
+            }
+
+            // Fix file permission
+            Global::fixFilePermission(syncPath + "/" + package->fileName);
+        }
+
+        // Download signature file...
+        if (package->downloadSignature) {
+            if (!downloadFile(package->url + package->fileName + BOXIT_SIGNATURE_ENDING)) {
+                errorMessage = QString("error: failed to download signature of package '%1'!").arg(package->fileName);
+                return false;
+            }
+
+            // Move file to sync pool directory
+            if (!QDir().rename(tmpPath + "/" + package->fileName + BOXIT_SIGNATURE_ENDING, syncPath + "/" + package->fileName + BOXIT_SIGNATURE_ENDING)) {
+                errorMessage = QString("error: failed to move file '%1' to sync folder!").arg(package->fileName + BOXIT_SIGNATURE_ENDING);
+                return false;
+            }
+
+            // Fix file permission
+            Global::fixFilePermission(syncPath + "/" + package->fileName + BOXIT_SIGNATURE_ENDING);
+        }
+    }
+
+    return true;
+}
+
+
+
+bool Sync::getDownloadSyncPackages(QString url, const QString repoName, const QStringList & excludeFiles, QList<Package> & downloadPackages, QStringList & dbPackages) {
+    QList<Package> packages;
+    const QString syncPath = Global::getConfig().syncPoolDir;
+
+    if (!url.endsWith("/"))
+        url += "/";
+
+    errorMessage.clear();
+
+    // First download the database...
+    if (!downloadFile(url + repoName + BOXIT_DB_ENDING))
+        return false;
+
+    // Fill the packages list
+    if (!fillPackagesList(repoName, packages))
+        return false;
+
+    // Remove database file again
+    QFile::remove(tmpPath + "/" + repoName + BOXIT_DB_ENDING); // Error isn't important
+
+    // Clean up first
+    dbPackages.clear();
+
+    // Set which packages should be downloaded
+    for (int i = 0; i < packages.size(); ++i) {
+        Package package = packages.at(i);
+        package.url = url;
+
+        // Check if the file is blacklisted
+        if (matchWithWildcard(package.packageName, excludeFiles))
+            continue;
+
+        // Add to db list
+        dbPackages.append(package.fileName);
+
+        // Check if file already exists
+        if (QFile::exists(syncPath + "/" + package.fileName))
+            package.downloadPackage = false;
+        else
+            package.downloadPackage = true;
+
+        if (QFile::exists(syncPath + "/" + package.fileName + BOXIT_SIGNATURE_ENDING))
+            package.downloadSignature = false;
+        else
+            package.downloadSignature = true;
+
+        if (package.downloadPackage || package.downloadSignature)
+            downloadPackages.append(package);
+    }
+
+    return true;
+}
+
+
+
+void Sync::cleanupTmpDir() {
+    // Remove tmp path
+    if (QDir(tmpPath).exists() && !Global::rmDir(tmpPath))
+        cerr << "error: failed to remove session tmp path!" << endl;
+
+    // Create tmp path
+    if (!QDir().mkpath(tmpPath))
+        cerr << "error: failed to create session tmp path!" << endl;
+}
+
+
 
 bool Sync::downloadFile(QString url) {
+    Download download(tmpPath);
     QEventLoop eventLoop;
     QObject::connect(&download, SIGNAL(finished(bool)), &eventLoop, SLOT(quit()));
 
     if (!download.download(url)) {
-        emit error("failed to start download!");
+        errorMessage = "error: failed to download file '" + url + "'!";
         return false;
     }
 
     eventLoop.exec();
 
-    if (download.isError()) {
-        emit error(download.lastError());
+    if (download.hasError()) {
+        errorMessage = "error: failed to download file '" + url + "'!\nerror message: " + download.lastError();
         return false;
     }
 
@@ -183,28 +371,34 @@ bool Sync::downloadFile(QString url) {
 
 
 
-bool Sync::fillPackagesList(const QString repoName) {
-    QString dbPath = destPath + "/.db";
+bool Sync::fillPackagesList(const QString repoName, QList<Package> & packages) {
+    QString dbPath = tmpPath + "/.db";
 
     // Create working folder
-    if ((QDir(dbPath).exists() && !Global::rmDir(dbPath))
-            || !QDir().mkpath(dbPath))
+    if ((QDir(dbPath).exists() && !Global::rmDir(dbPath))) {
+        errorMessage = "error: failed to remove folder '" + dbPath + "'";
         return false;
+    }
+
+    if (!QDir().mkpath(dbPath)) {
+        errorMessage = "error: failed to create folder '" + dbPath + "'";
+        return false;
+    }
 
 
     // Unpack the database file
     QProcess process;
     process.setProcessChannelMode(QProcess::MergedChannels);
     process.setWorkingDirectory(dbPath);
-    process.start("tar", QStringList() << "-xf" << destPath + "/" + repoName + BOXIT_DB_ENDING << "-C" << dbPath);
+    process.start("tar", QStringList() << "-xf" << tmpPath + "/" + repoName + BOXIT_DB_ENDING << "-C" << dbPath);
 
     if (!process.waitForFinished(60000)) {
-        emit error("archive extract process timeout!");
+        errorMessage = "error: archive extract process timeout!";
         return false;
     }
 
     if (process.exitCode() != 0) {
-        emit error("archive extract process failed: " + QString(process.readAll()));
+        errorMessage = "error: archive extract process failed: " + QString(process.readAll());
         return false;
     }
 
@@ -222,7 +416,7 @@ bool Sync::fillPackagesList(const QString repoName) {
             continue;
 
         if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-            emit error(QString("failed to read database file '%1'!").arg(path));
+            errorMessage = QString("error: failed to read database file '%1'!").arg(path);
             return false;
         }
 
@@ -244,7 +438,7 @@ bool Sync::fillPackagesList(const QString repoName) {
         file.close();
 
         if (package.packageName.isEmpty() || package.fileName.isEmpty() || package.sha256sum.isEmpty()) {
-            emit error(QString("uncomplete desc file '%1'!").arg(path));
+            errorMessage = QString("uncomplete desc file '%1'!").arg(path);
             return false;
         }
 
@@ -254,54 +448,6 @@ bool Sync::fillPackagesList(const QString repoName) {
     // Cleanup
     Global::rmDir(dbPath); // Error isn't important...
 
-    return true;
-}
-
-
-
-bool Sync::fileAlreadyExist(Package &package, const QStringList &checkFilePaths) {
-    package.downloadPackage = true;
-    package.downloadSignature = true;
-
-    // Check if file already exists
-    for (int i = 0; i < checkFilePaths.size(); ++i) {
-        QString path = checkFilePaths.at(i) + "/" + package.fileName;
-
-        //if (QFile::exists(path) && CryptSHA256::sha256CheckSum(path) == package.sha256sum)
-        if (QFile::exists(path)) // Sha256sum checking removed, because this could overwrite files and create invalid database files
-            package.downloadPackage = false;
-
-        if (QFile::exists(path + BOXIT_SIGNATURE_ENDING))
-            package.downloadSignature = false;
-    }
-
-    return (!package.downloadPackage && !package.downloadSignature);
-}
-
-
-
-bool Sync::readExcludeFile(const QString filePath, QStringList &patterns) {
-    QFile file(filePath);
-
-    if (!file.exists()) {
-        emit error(QString("warning: exclude file '%1' does not exist!").arg(filePath));
-        return true; // This shouldn't produce an error...
-    }
-
-    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        emit error(QString("failed to read file '%1'!").arg(filePath));
-        return false;
-    }
-
-    QTextStream in(&file);
-    while (!in.atEnd()) {
-        QString line = in.readLine().trimmed();
-
-        if (!line.isEmpty())
-            patterns.append(line);
-    }
-
-    file.close();
     return true;
 }
 

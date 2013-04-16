@@ -22,24 +22,27 @@
 #define VERSION_H
 
 #include <QString>
-#include <QStringList>
-#include <QList>
 
 
 class Version : public QString
 {
 public:
-    explicit Version(QString string = "-1");
+    Version();
+    Version(const QString & version);
 
     bool operator<(Version const& version) const;
     bool operator>(Version const& version) const;
     bool operator==(Version const& version) const;
+    bool operator>=(Version const& version) const;
+    bool operator<=(Version const& version) const;
 
     bool isValid();
 
 private:
-    int compareVersions (Version version1, Version version2) const;
-    QList<int> splittoIntList(Version version) const;
+    static void parseEVR(char *evr, const char **ep, const char **vp,
+            const char **rp);
+    static int rpmvercmp(const char *a, const char *b);
+    static int alpm_pkg_vercmp(const char *a, const char *b);
 };
 
 

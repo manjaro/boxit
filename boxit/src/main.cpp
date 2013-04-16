@@ -26,6 +26,7 @@
 #include <termios.h>
 #include <unistd.h>
 #include <signal.h>
+#include <sys/stat.h>
 #include <readline/readline.h>
 #include <readline/history.h>
 #include <QByteArray>
@@ -33,14 +34,16 @@
 #include <QStringList>
 #include <QList>
 #include <QFile>
+#include <QFileInfo>
 #include <QTextStream>
 #include <QDir>
 #include <QFileInfo>
-#include "interactiveprocess.h"
+#include <QMap>
 #include "boxitsocket.h"
 #include "const.h"
 #include "version.h"
 #include "timeoutreset.h"
+#include "interactiveprocess.h"
 
 using namespace std;
 
@@ -51,60 +54,55 @@ enum ARGUMENTS {
     ARG_PULL = 0x0001,
     ARG_PUSH = 0x0002,
     ARG_INIT = 0x0004,
-    ARG_SHELL = 0x0008
+    ARG_SHELL = 0x0008,
+    ARG_STATE = 0x0010,
+    ARG_ERRORS = 0x0020,
+    ARG_SYNC = 0x0040
 };
 
 
-struct Config {
-    QString url, state, repository, architecture;
+
+struct Repo {
+    QString path, name, architecture, state;
+    bool isSyncRepo;
+    QStringList overlayPackages, syncPackages;
 };
+
+
+
+struct Branch {
+    QString path, configPath, serverURL, name;
+    QList<Repo> repos;
+};
+
+
+
+struct LocalRepo {
+    Repo *parentRepo;
+    QString path, name, architecture;
+    QStringList packages, signatures, addPackages, removePackages;
+};
+
+
 
 
 
 // General
-void printHelp();
-void drawLogo();
 void catchSignal(int);
 void interruptEditorProcess(int sig);
-void interruptProcessOutput(int sig);
-bool socketOperation();
-bool setConfig();
-bool readConfig();
-
-// Package operations
+void printHelp();
+void drawLogo();
+bool fixFilePermission();
+bool rmDir(QString path, bool onlyHidden = false, bool onlyContent = false);
 QString getNameofPKG(QString pkg);
 Version getVersionofPKG(QString pkg);
 QString getArchofPKG(QString pkg);
-bool checkValidArchitecture();
-bool checkDuplicatePackages();
-bool checkForSignatures();
 QByteArray sha1CheckSum(QString filePath);
-
-// Socket operations
-bool connectAndLoginToHost(QString host);
-bool lockPool(QString repository, QString architecture);
-bool unlockPool();
-bool printServerMessages(bool allowStop);
-void printMessageHistory(QString history);
-bool getRepositoryState(QString &state, QString repository, QString architecture);
-bool getRemoteFiles(QStringList &remoteFiles, QString repository, QString architecture);
-bool getRemoteSignatures(QStringList &remoteSignatures, QString repository, QString architecture);
-bool getRemotePackages(QStringList &remotePackages, QString repository, QString architecture);
-bool performInit();
-bool performPull();
-bool performPush();
-bool uploadData(QString path);
-void resetServerTimeout();
-
-// BoxIt shell
-bool runShell();
-inline bool basicInputCheck(QString &repository, QString &architecture);
-
 
 // Input
 void consoleEchoMode(bool on = true);
 void consoleFill(char fill, int wide);
-QString getInput(QString beg = "", bool hide = false, bool addToHistory = true, bool resetTimeout = true);
+QString getInput(QString beg = "", bool hide = false, bool addToHistory = true);
 
 // Readline
 static char** completion(const char*, int ,int);
@@ -112,16 +110,50 @@ char* generator(const char*,int);
 char * dupstr (char*);
 void * xmalloc (int);
 
+// General socket operations
+bool connectAndLoginToHost(QString host);
+bool connectIfRequired(QString & host);
+void resetServerTimeout();
+
+// Branch & Repo operations
+bool createBranch();
+bool initBranch(const QString path);
+bool initRepo(Repo *repo);
+bool readPackagesConfig(const QString path, QStringList & packages);
+bool writePackagesConfig(const QString path, const QStringList & packages);
+bool saveBranchConfigs();
+bool getAllRemoteBranches(QStringList & branches);
+bool fillBranchRepos(Branch & branch, bool withPackages);
+
+bool pullBranch();
+bool applySymlinks(const QStringList & packages, const QString path, const QString link, const QString coutPath, bool & changedFiles);
+
+bool pushBranch();
+bool checkValidArchitecture(QList<LocalRepo> & repos);
+bool checkDuplicatePackages(QList<LocalRepo> & repos);
+bool checkSignatures(QList<LocalRepo> & repos);
+bool checkMatchRepositories(QList<LocalRepo> & repos);
+bool checkOverwriteSyncPackages(QList<LocalRepo> & repos);
+bool uploadData(const QString path, const int currentIndex, const int maxIndex);
+
+bool listenOnStatus(bool exitOnSessionEnd);
+bool printErrors();
+
+bool syncBranch();
+bool changeSyncUrlOnRequest(const QString branchName);
+bool changeSyncExcludeFiles(const QString branchName) ;
+
+
 // Auto completion
-const char* cmd[] = { "www.manjaro.org", "manjaro.org", "clear", "quit", "exit", "help", "passwd", "list", "rebuilddb", "sync", "addrepo", "rmrepo", "copyrepo", "moverepo", "syncurl", "exedit", "kill", "pshow" };
+const char* cmd[] = { "www.manjaro.org", "manjaro.org" };
 
 
 // Variables
-ARGUMENTS arguments;
 BoxitSocket boxitSocket;
-Config config;
+ARGUMENTS arguments;
 quint16 msgID;
 QByteArray data;
+Branch branch;
 QString username;
 InteractiveProcess *editorProcess = NULL;
 
@@ -131,6 +163,7 @@ InteractiveProcess *editorProcess = NULL;
 int main(int argc, char *argv[])
 {
     QCoreApplication app(argc, argv);
+    editorProcess = new InteractiveProcess(&app);
 
     // Set readline completion
     rl_attempted_completion_function = completion;
@@ -145,9 +178,10 @@ int main(int argc, char *argv[])
     signal(SIGTERM, catchSignal);
     signal(SIGKILL, catchSignal);
 
-    arguments = ARG_NONE;
 
     // Get command line arguments
+    arguments = ARG_NONE;
+
     for (int nArg=1; nArg < argc; nArg++) {
         if (strcmp(argv[nArg], "help") == 0) {
             printHelp();
@@ -164,28 +198,15 @@ int main(int argc, char *argv[])
         }
         else if (strcmp(argv[nArg], "init") == 0) {
             arguments = (ARGUMENTS)(arguments | ARG_INIT);
-
-            if (++nArg >= argc) {
-                cerr << "option 'init' requires a boxit url as argument!\nSample: host@repository:architecture" << endl;
-                return 1;
-            }
-
-            QString work = argv[nArg];
-            config.url = work.split("@", QString::KeepEmptyParts).first();
-
-            if (!work.contains("@") || !work.contains(":") || config.url.isEmpty()) {
-                cerr << "error: the passed url is invalid!\nSample: host@repository:architecture" << endl;
-                return 1;
-            }
-
-            work = work.split("@", QString::SkipEmptyParts).last();
-            config.architecture = work.split(":", QString::KeepEmptyParts).last();
-            config.repository = work.split(":", QString::KeepEmptyParts).first();
-
-            if (config.repository.isEmpty() || config.architecture.isEmpty()) {
-                cerr << "error: the passed url is invalid!\nSample: host@repository:architecture" << endl;
-                return 1;
-            }
+        }
+        else if (strcmp(argv[nArg], "state") == 0) {
+            arguments = (ARGUMENTS)(arguments | ARG_STATE);
+        }
+        else if (strcmp(argv[nArg], "errors") == 0) {
+            arguments = (ARGUMENTS)(arguments | ARG_ERRORS);
+        }
+        else if (strcmp(argv[nArg], "sync") == 0) {
+            arguments = (ARGUMENTS)(arguments | ARG_SYNC);
         }
         else {
             cerr << "invalid option: " << argv[nArg] << endl << endl;
@@ -210,33 +231,41 @@ int main(int argc, char *argv[])
     }
 
 
-
-    // Check if .boxit/config exists and read it
-    if (QFile::exists(BOXIT_CONFIG)) {
-        if (!readConfig())
-            return 1; // Error messages are printed by the function...
-    }
-    else if (arguments & ARG_PULL || arguments & ARG_PUSH) {
-        cerr << "error: cannot push or pull without a config! Init first..." << endl;
-        return 1;
+    // Sync argument
+    if (arguments & ARG_SYNC) {
+        if (syncBranch())   return 0;
+        else                return 1; // Error messages are printed by the method
     }
 
+    // State argument
+    if (arguments & ARG_STATE) {
+        if (listenOnStatus(false))  return 0;
+        else                        return 1; // Error messages are printed by the method
+    }
 
-    //###
-    //### Perform operations
-    //###
+    // Error argument
+    if (arguments & ARG_ERRORS) {
+        if (printErrors())  return 0;
+        else                return 1; // Error messages are printed by the method
+    }
 
-    // Run BoxIt shell
-    if (arguments & ARG_SHELL && !runShell())
-        return 1;
+    // Init argument
+    if (arguments & ARG_INIT) {
+        if (createBranch()) return 0;
+        else                return 1; // Error messages are printed by the method
+    }
 
-    // Check for duplicate packages and missing signatures
-    if (arguments & ARG_PUSH && (!checkValidArchitecture() || !checkDuplicatePackages() || !checkForSignatures()))
-        return 1;
+    // Init and read config of branch
+    if (!initBranch(QDir::currentPath()))
+        return 1; // Error messages are printed by the method
 
-    // Perform socket job
-    if ((arguments & ARG_INIT || arguments & ARG_PULL || arguments & ARG_PUSH) && !socketOperation())
-        return 1;
+    // Pull argument
+    if (arguments & ARG_PULL && !pullBranch())
+        return 1; // Error messages are printed by the method
+
+    // Push argument
+    if (arguments & ARG_PUSH && !pushBranch())
+        return 1; // Error messages are printed by the method
 
 
     return 0;
@@ -258,15 +287,8 @@ void catchSignal(int) {
 void interruptEditorProcess(int sig) {
     signal(sig, SIG_DFL);
 
-    if (editorProcess != NULL)
+    if (editorProcess)
         editorProcess->kill();
-}
-
-
-
-void interruptProcessOutput(int sig) {
-    signal(sig, SIG_DFL);
-    boxitSocket.sendData(MSG_STOP_POOL_MESSAGES);
 }
 
 
@@ -276,11 +298,14 @@ void printHelp() {
     cout << "Roland Singer <roland@manjaro.org>" << endl << endl;
 
     cout << "Usage: boxit [OPTIONS] [...]" << endl << endl;
-    cout << "  help\t\t\tshow help" << endl;
-    cout << "  init host@repo:arch\tinitiate a first repo and pull from it" << endl;
-    cout << "  pull\t\t\tupdate an existing repo" << endl;
-    cout << "  push\t\t\tupload all changes" << endl;
-    cout << "  shell\t\t\trun BoxIt shell" << endl;
+    cout << "  help\t\tshow help" << endl;
+    cout << "  init\t\tinitiate branch and pull latest source" << endl;
+    cout << "  pull\t\tupdate an existing branch" << endl;
+    cout << "  push\t\tupload all changes" << endl;
+    cout << "  sync\t\tsynchronize branch" << endl;
+    cout << "  state\t\tshow state" << endl;
+    cout << "  errors\tshow all remote errors" << endl;
+    cout << "  shell\t\trun BoxIt shell" << endl;
     cout << endl;
 }
 
@@ -295,99 +320,49 @@ void drawLogo() {
 
 
 
-bool socketOperation() {
-    if (config.url.isEmpty() || config.repository.isEmpty() || config.architecture.isEmpty()) {
-        cerr << "error: url, architecture or repository is somehow empty!?" << endl;
-        return false;
-    }
+bool fixFilePermission(QString file) {
+    int ret;
 
-    // Connect to host
-    if (!connectAndLoginToHost(config.url))
-        return false; // Error messages are printed by the function
+    // Set right permission
+    mode_t process_mask = umask(0);
+    ret = chmod(file.toUtf8().data(), S_IRUSR | S_IWUSR | S_IXUSR | S_IRGRP | S_IROTH | S_IXGRP | S_IXOTH);
+    umask(process_mask);
 
-
-    // Perform operations
-    if (arguments & ARG_INIT && (!performInit() || !performPull()))
-        goto error; // Error messages are printed by the functions
-    else if (arguments & ARG_PUSH && !performPush())
-        goto error; // Error messages are printed by the function
-    else if (arguments & ARG_PULL && !performPull())
-        goto error; // Error messages are printed by the function
-
-
-    // Disconnect from server
-    boxitSocket.disconnectFromHost();
-    return true;
-
-error:
-    // Disconnect from server
-    boxitSocket.disconnectFromHost();
-    return false;
+    return (ret == 0);
 }
 
 
 
-bool readConfig() {
-    QFile file(BOXIT_CONFIG);
-    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        cerr << "error: failed to read file '" << BOXIT_CONFIG << "'!" << endl;
-        return false;
-    }
+bool rmDir(QString path, bool onlyHidden, bool onlyContent) {
+    if (!QDir().exists(path))
+        return true;
 
-    QTextStream in(&file);
-    while (!in.atEnd()) {
-        QString line = in.readLine().split("#", QString::KeepEmptyParts).first().trimmed();
-        if (line.isEmpty() || !line.contains("="))
+    bool success = true;
+
+    // Remove content of dir
+    QStringList list = QDir(path).entryList(QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden | QDir::System, QDir::Name);
+
+    for (int i = 0; i < list.size(); ++i) {
+        if (onlyHidden && !list.at(i).trimmed().startsWith("."))
             continue;
 
-        QString arg1 = line.split("=").first().toLower().trimmed(), arg2 = line.split("=").last().trimmed();
+        QFileInfo info(path + "/" + list.at(i));
 
-        if (arg1 == "remoteurl")
-            config.url = arg2;
-        else if (arg1 == "remoterepository")
-            config.repository = arg2;
-        else if (arg1 == "remotearchitecture")
-            config.architecture = arg2;
-        else if (arg1 == "remotestate")
-            config.state = arg2;
+        if (info.isDir()) {
+            if (!rmDir(path + "/" + list.at(i)), onlyHidden)
+                success = false;
+        }
+        else {
+            if (!QFile::remove(path + "/" + list.at(i)))
+                success = false;
+        }
     }
-    file.close();
 
-    if (config.url.isEmpty() || config.repository.isEmpty() || config.architecture.isEmpty()) {
-        cerr << "error: config '" << BOXIT_CONFIG << "' is incomplete!" << endl;
+    if (!onlyContent && !QDir().rmdir(path))
         return false;
-    }
 
-    return true;
+    return success;
 }
-
-
-
-bool setConfig() {
-    // Create config
-    QFile file(BOXIT_CONFIG);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
-        cerr << "error: failed to create BoxIt config '" << BOXIT_CONFIG << "'!" << endl;
-        return false;
-    }
-
-    QTextStream out(&file);
-    out << "###\n### BoxIt Config\n###\n";
-    out << "\nremoteurl = " << config.url;
-    out << "\nremoterepository = " << config.repository;
-    out << "\nremotearchitecture = " << config.architecture;
-    out << "\nremotestate = " << config.state;
-
-    file.close();
-
-    return true;
-}
-
-
-
-//###
-//### Package operations
-//###
 
 
 
@@ -436,1553 +411,6 @@ QByteArray sha1CheckSum(QString filePath) {
 
 
 
-bool checkValidArchitecture() {
-    QStringList invalidFiles, dummyFiles = QDir(QDir::currentPath()).entryList(QString(BOXIT_FILE_FILTERS).split(" ", QString::SkipEmptyParts), QDir::NoDotAndDotDot | QDir::Files | QDir::System, QDir::Name);
-    QStringList skipArchs = QString(BOXIT_SKIP_ARCHITECTURE_CHECKS).split(" ", QString::SkipEmptyParts);
-
-    for (int i = 0; i < dummyFiles.size(); ++i) {
-        QString currentFile = dummyFiles.at(i);
-        QString arch = getArchofPKG(currentFile);
-
-        if (!skipArchs.contains(arch) && arch != config.architecture)
-            invalidFiles.append(currentFile);
-    }
-
-    // Inform the user if invalid packages were found
-    if (!invalidFiles.isEmpty()) {
-        while (true) {
-            QString answer = getInput(QString::number(invalidFiles.size()) + " package(s) with invalid architecture found!\nRemove them? [Y/n/d] (d=details) ", false, false).toLower().trimmed();
-            if (answer == "d") {
-                cout << endl << "packages to remove:" << endl << endl;
-
-                for (int i = 0; i < invalidFiles.size(); ++i) {
-                    cout << "   " << invalidFiles.at(i).toAscii().data() << endl;
-                }
-
-                cout << endl;
-                continue;
-            }
-            else if (!answer.isEmpty() && answer != "y") {
-                cerr << "abording..." << endl;
-                return false;
-            }
-            else {
-                // Remove invalid packages
-                for (int i = 0; i < invalidFiles.size(); ++i) {
-                    if (!QFile::remove(invalidFiles.at(i))) {
-                        cerr << "error: failed to remove file '" << invalidFiles.at(i).toAscii().data() << "'!" << endl;
-                        return false;
-                    }
-                }
-
-                break;
-            }
-        }
-    }
-
-    return true;
-}
-
-
-
-bool checkDuplicatePackages() {
-    QStringList duplicatePackages, dummyFiles = QDir(QDir::currentPath()).entryList(QString(BOXIT_FILE_FILTERS).split(" ", QString::SkipEmptyParts), QDir::NoDotAndDotDot | QDir::Files | QDir::System, QDir::Name);
-
-    // Find all duplicate Packages
-    for (int i = 0; i < dummyFiles.size(); ++i) {
-        QString currentFile = dummyFiles.at(i);
-        QString packageName = getNameofPKG(currentFile);
-
-        // Check for double packages
-        QStringList foundPackages, packages = dummyFiles.filter(packageName);
-        for (int i = 0; i < packages.size(); ++i) {
-            if (getNameofPKG(packages.at(i)) == packageName)
-                foundPackages.append(packages.at(i));
-        }
-
-        if (foundPackages.size() > 1)
-            duplicatePackages.append(foundPackages);
-    }
-
-    // Remove duplicates and sort
-    duplicatePackages.removeDuplicates();
-    duplicatePackages.sort();
-
-    // Inform the user if double packages were found
-    if (!duplicatePackages.isEmpty()) {
-        // Fill list of duplicate packages to remove
-        QStringList removeDuplicatePackages = duplicatePackages;
-
-        for (int i = 0; i < duplicatePackages.size(); ++i) {
-            QString filename = duplicatePackages.at(i);
-            QString name = getNameofPKG(filename);
-            Version version = getVersionofPKG(filename);
-
-            for (int x = 0; x < duplicatePackages.size(); ++x) {
-                QString filenameCompare = duplicatePackages.at(x);
-                Version versionCompare = getVersionofPKG(filenameCompare);
-
-                if (x == i || name != getNameofPKG(filenameCompare) || version > versionCompare)
-                    continue;
-
-                filename = filenameCompare;
-                version = versionCompare;
-            }
-
-            removeDuplicatePackages.removeAll(filename);
-        }
-
-        removeDuplicatePackages.removeDuplicates();
-        removeDuplicatePackages.sort();
-
-
-        while (true) {
-            QString answer = getInput(QString::number(duplicatePackages.size()) + " packages with multiple versions were found!\nRemove " + QString::number(removeDuplicatePackages.size()) + " old version(s)? [Y/n/d] (d=details) ", false, false).toLower().trimmed();
-            if (answer == "d") {
-                cout << endl << "duplicate packages:" << endl << endl;
-
-                for (int i = 0; i < duplicatePackages.size(); ++i) {
-                    cout << "   " << duplicatePackages.at(i).toAscii().data() << endl;
-                }
-
-                cout << endl << "packages to remove:" << endl << endl;
-
-                for (int i = 0; i < removeDuplicatePackages.size(); ++i) {
-                    cout << "   " << removeDuplicatePackages.at(i).toAscii().data() << endl;
-                }
-
-                cout << endl;
-                continue;
-            }
-            else if (!answer.isEmpty() && answer != "y") {
-                cerr << "abording..." << endl;
-                return false;
-            }
-            else {
-                // Remove old packages
-                for (int i = 0; i < removeDuplicatePackages.size(); ++i) {
-                    if (!QFile::remove(removeDuplicatePackages.at(i))) {
-                        cerr << "error: failed to remove file '" << removeDuplicatePackages.at(i).toAscii().data() << "'!" << endl;
-                        return false;
-                    }
-                }
-
-                break;
-            }
-        }
-    }
-
-    return true;
-}
-
-
-
-bool checkForSignatures() {
-    QStringList corruptSignatures, dummyFiles = QDir(QDir::currentPath()).entryList(QStringList() << "*" + QString(BOXIT_SIGNATURE_ENDING), QDir::NoDotAndDotDot | QDir::Files | QDir::System, QDir::Name);
-
-
-    // Find all signatures without package
-    for (int i = 0; i < dummyFiles.size(); ++i) {
-        QString currentFile = dummyFiles.at(i);
-
-        if (!QFile::exists(QString(currentFile).remove(currentFile.length() - QString(BOXIT_SIGNATURE_ENDING).length(), QString(BOXIT_SIGNATURE_ENDING).length())))
-            corruptSignatures.append(currentFile);
-    }
-
-    if (!corruptSignatures.isEmpty()) {
-        while (true) {
-            QString answer = getInput(QString::number(corruptSignatures.size()) + " signature file(s) without package! Remove? [Y/n/d] (d=details) ", false, false).toLower().trimmed();
-
-            if (answer == "d") {
-                cout << endl << "signatures without package:" << endl << endl;
-
-                for (int i = 0; i < corruptSignatures.size(); ++i) {
-                    cout << "   " << corruptSignatures.at(i).toAscii().data() << endl;
-                }
-
-                cout << endl;
-                continue;
-            }
-            else if (!answer.isEmpty() && answer != "y") {
-                cerr << "abording..." << endl;
-                return false;
-            }
-            else {
-                // Remove corrupt signatures
-                for (int i = 0; i < corruptSignatures.size(); ++i) {
-                    if (!QFile::remove(corruptSignatures.at(i))) {
-                        cerr << "error: failed to remove file '" << corruptSignatures.at(i).toAscii().data() << "'!" << endl;
-                        return false;
-                    }
-                }
-
-                break;
-            }
-        }
-    }
-
-
-
-    // Find all packages with missing signatures
-    corruptSignatures.clear();
-    dummyFiles = QDir(QDir::currentPath()).entryList(QString(BOXIT_FILE_FILTERS).split(" ", QString::SkipEmptyParts), QDir::NoDotAndDotDot | QDir::Files | QDir::System, QDir::Name);
-
-    for (int i = 0; i < dummyFiles.size(); ++i) {
-        QString currentFile = dummyFiles.at(i);
-
-        if (!QFile::exists(currentFile + BOXIT_SIGNATURE_ENDING))
-            corruptSignatures.append(currentFile);
-    }
-
-    if (corruptSignatures.isEmpty())
-        return true;
-
-
-    while (true) {
-        QString answer;
-        if (corruptSignatures.size() == 1)
-            answer = getInput(QString::number(corruptSignatures.size()) + " package without signature was found! Ignore? [N/y/d] (d=details) ", false, false).toLower().trimmed();
-        else
-            answer = getInput(QString::number(corruptSignatures.size()) + " packages without signature were found! Ignore? [N/y/d] (d=details) ", false, false).toLower().trimmed();
-
-
-        if (answer == "d") {
-            cout << endl << "packages without signatures:" << endl << endl;
-
-            for (int i = 0; i < corruptSignatures.size(); ++i) {
-                cout << "   " << corruptSignatures.at(i).toAscii().data() << endl;
-            }
-
-            cout << endl;
-            continue;
-        }
-        else if (answer.isEmpty() || answer != "y") {
-            cerr << "abording..." << endl;
-            return false;
-        }
-        else {
-            cout << "ignoring warning..." << endl;
-            break;
-        }
-    }
-
-    return true;
-}
-
-
-
-//###
-//### Socket operations
-//###
-
-
-
-bool connectAndLoginToHost(QString host) {
-    cout << "\r" << flush;
-    cout << QString("Connecting to host %1...").arg(host.trimmed()).toAscii().data() << flush;
-
-    // Connect to host
-    if (!boxitSocket.connectToHost(host))
-        return false; // Error messages are printed by the boxit socket class
-
-    cout << "\r" << flush;
-    cout << QString("Connected to host %1     ").arg(host.trimmed()).toAscii().data() << endl;
-
-
-    // First send our fuchs version to the server
-    boxitSocket.sendData(MSG_CHECK_VERSION, QByteArray(QString::number((int)BOXIT_VERSION).toAscii()));
-    boxitSocket.readData(msgID);
-    if (msgID != MSG_SUCCESS) {
-        cerr << "error: the BoxIt server is running a different version! Abording..." << endl;
-        goto error;
-    }
-
-
-    // Let's login now
-    for (int i=0;; i++) {
-        username = getInput("username: ", false, false, false);
-        QString password = QString(QCryptographicHash::hash(getInput("password: ", true, false, false).toLocal8Bit(), QCryptographicHash::Sha1).toHex());
-
-        boxitSocket.sendData(MSG_AUTHENTICATE, QByteArray(QString(username + BOXIT_SPLIT_CHAR + password).toAscii()));
-        boxitSocket.readData(msgID);
-
-        if (msgID == MSG_SUCCESS) {
-            break;
-        }
-        else {
-            cerr << "Failed to login!" << endl;
-            if (i>1)
-                goto error;
-        }
-    }
-
-
-    return true;
-
-error:
-    // Disconnect from server
-    boxitSocket.disconnectFromHost();
-    return false;
-}
-
-
-
-bool lockPool(QString repository, QString architecture) {
-    // Lock repository
-    boxitSocket.sendData(MSG_LOCK, QByteArray(QString(repository + BOXIT_SPLIT_CHAR + architecture).toAscii()));
-    boxitSocket.readData(msgID);
-
-    if (msgID == MSG_ERROR_POOL_ALREADY_LOCKED) {
-        cerr << "error: pool is in use!" << endl;
-        return false;
-    }
-    else if (msgID == MSG_ERROR_NOT_EXIST) {
-        cerr << "error: repository does not exist!" << endl;
-        return false;
-    }
-    else if (msgID == MSG_ERROR_IS_BUSY) {
-        cerr << "error: repository is busy!" << endl;
-        return false;
-    }
-    else if (msgID != MSG_SUCCESS) {
-        cerr << "error: failed to lock pool!" << endl;
-        return false;
-    }
-
-    return true;
-}
-
-
-
-bool unlockPool() {
-    // Unlock pool
-    boxitSocket.sendData(MSG_UNLOCK);
-    boxitSocket.readData(msgID);
-    if (msgID != MSG_SUCCESS) {
-        cerr << "error: failed to unlock pool!" << endl;
-        return false;
-    }
-
-    return true;
-}
-
-
-
-bool printServerMessages(bool allowStop) {
-    boxitSocket.sendData(MSG_GET_POOL_MESSAGES);
-    boxitSocket.readData(msgID, data);
-
-    if (msgID != MSG_SUCCESS) {
-        cerr << "error: failed to request pool process messages!" << endl;
-        return false;
-    }
-
-
-    // Set our interrupt signal if allowed
-    if (allowStop) {
-        cout << "hint: stop process output with CTRL+C" << endl;
-        signal(SIGINT, interruptProcessOutput);
-    }
-
-    // Our timeout reset
-    TimeOutReset timeOutReset(&boxitSocket);
-    timeOutReset.start();
-
-    // Print message history
-    printMessageHistory(QString(data));
-
-    // Check if process is already finished
-    boxitSocket.sendData(MSG_REQUEST_PROCESS_STATE);
-    boxitSocket.readData(msgID);
-
-    if (msgID == MSG_PROCESS_FINISHED) {
-        cout << "> finished process!" << endl;
-        return true;
-    }
-    else if (msgID == MSG_PROCESS_FAILED) {
-        cout << "> process failed!" << endl;
-        return false;
-    }
-    else if (msgID != MSG_PROCESS_RUNNING) {
-        cout << "> server answered with an unkown command!" << endl;
-        return false;
-    }
-
-
-    // Get messages...
-    bool lastFlush = false;
-    boxitSocket.readData(msgID, data);
-
-    while (msgID == MSG_MESSAGE) {
-        QString msg = QString(data);
-
-        // Check if we should flush
-        if (msg.startsWith(BOXIT_FLUSH_STRING)) {
-            msg.remove(0, QString(BOXIT_FLUSH_STRING).size());
-            cout << "\r" << flush;
-            cout << msg.toAscii().data() << flush;
-            lastFlush = true;
-        }
-        else {
-            if (lastFlush) {
-                lastFlush = false;
-                cout << endl;
-            }
-            cout << msg.toAscii().data() << endl;
-        }
-
-        boxitSocket.readData(msgID, data);
-    }
-
-    // Reset our interrupt signal
-    signal(SIGINT, SIG_DFL);
-
-    timeOutReset.stop();
-
-    if (msgID == MSG_PROCESS_BACKGROUND) {
-        cout << "> sending process to background..." << endl;
-        return true;
-    }
-    else if (msgID == MSG_PROCESS_FINISHED) {
-        cout << "> finished process!" << endl;
-        return true;
-    }
-    else if (msgID == MSG_PROCESS_FAILED) {
-        cout << "> process failed!" << endl;
-        return false;
-    }
-    else {
-        cout << "> server answered with an unkown command!" << endl;
-        return false;
-    }
-}
-
-
-
-void printMessageHistory(QString history) {
-    QStringList list = history.split("\n", QString::KeepEmptyParts);
-    QString last = list.last();
-    list.removeLast();
-
-    // Check if we should flush
-    if (last.startsWith(BOXIT_FLUSH_STRING)) {
-        last.remove(0, QString(BOXIT_FLUSH_STRING).size());
-
-        cout << list.join("\n").toAscii().data() << endl;
-        cout << "\r" << flush;
-        cout << last.toAscii().data() << flush;
-    }
-    else {
-        cout << history.toAscii().data() << endl;
-    }
-}
-
-
-
-bool getRepositoryState(QString &state, QString repository, QString architecture) {
-    boxitSocket.sendData(MSG_REPOSITORY_STATE, QByteArray(QString(repository + BOXIT_SPLIT_CHAR + architecture).toAscii()));
-    boxitSocket.readData(msgID, data);
-
-    if (msgID == MSG_ERROR_NOT_EXIST) {
-        cerr << "error: repository does not exist!" << endl;
-        return false;
-    }
-    else if (msgID == MSG_ERROR_IS_BUSY) {
-        cerr << "error: repository is busy!" << endl;
-        return false;
-    }
-    else if (msgID != MSG_SUCCESS) {
-        cerr << "error: failed to obtain repository state!" << endl;
-        return false;
-    }
-
-    state = QString(data);
-    return true;
-}
-
-
-
-bool getRemoteFiles(QStringList &remoteFiles, QString repository, QString architecture) {
-    QStringList remoteSignatures;
-
-    if (!getRemotePackages(remoteFiles, repository, architecture) || !getRemoteSignatures(remoteSignatures, repository, architecture))
-        return false;
-
-    remoteFiles.append(remoteSignatures);
-    return true;
-}
-
-
-
-bool getRemoteSignatures(QStringList &remoteSignatures, QString repository, QString architecture) {
-    remoteSignatures.clear();
-
-    boxitSocket.sendData(MSG_SIGNATURE_LIST, QByteArray(QString(repository + BOXIT_SPLIT_CHAR + architecture).toAscii()));
-    boxitSocket.readData(msgID, data);
-
-    while (msgID == MSG_SIGNATURE) {
-        remoteSignatures.append(QString(data));
-        boxitSocket.readData(msgID, data);
-    }
-
-    if (msgID == MSG_ERROR_NOT_EXIST) {
-        cerr << "error: repository does not exist!" << endl;
-        return false;
-    }
-    else if (msgID == MSG_ERROR_IS_BUSY) {
-        cerr << "error: repository is busy!" << endl;
-        return false;
-    }
-    else if (msgID != MSG_SUCCESS) {
-        cerr << "error: failed to obtain signature list!" << endl;
-        return false;
-    }
-
-    return true;
-}
-
-
-
-bool getRemotePackages(QStringList &remotePackages, QString repository, QString architecture) {
-    remotePackages.clear();
-
-    boxitSocket.sendData(MSG_PACKAGE_LIST, QByteArray(QString(repository + BOXIT_SPLIT_CHAR + architecture).toAscii()));
-    boxitSocket.readData(msgID, data);
-
-    while (msgID == MSG_PACKAGE) {
-        remotePackages.append(QString(data));
-        boxitSocket.readData(msgID, data);
-    }
-
-    if (msgID == MSG_ERROR_NOT_EXIST) {
-        cerr << "error: repository does not exist!" << endl;
-        return false;
-    }
-    else if (msgID == MSG_ERROR_IS_BUSY) {
-        cerr << "error: repository is busy!" << endl;
-        return false;
-    }
-    else if (msgID != MSG_SUCCESS) {
-        cerr << "error: failed to obtain package list!" << endl;
-        return false;
-    }
-
-    return true;
-}
-
-
-
-bool performInit() {
-    // Check if already a boxit config exists
-    if (QFile(BOXIT_CONFIG).exists()) {
-        cerr << "error: a BoxIt config already exists! Maybe you want to use pull?" << endl;
-        return false;
-    }
-
-    // Check if directory is empty
-    if (!QDir().entryList(QDir::NoDotAndDotDot | QDir::AllEntries | QDir::System, QDir::Name).isEmpty()) {
-        cerr << "error: the current directory is not empty!" << endl;
-        return false;
-    }
-
-
-    // Create directory
-    if (!QDir().exists(BOXIT_DIR))
-        QDir().mkdir(BOXIT_DIR);
-
-
-    // Create dummy file
-    QFile file(BOXIT_DUMMY_FILE);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
-        cerr << "error: failed to create BoxIt dummy file '" << BOXIT_DUMMY_FILE << "'!" << endl;
-        return false;
-    }
-
-    QTextStream out(&file);
-    out << "###\n### BoxIt Dummy File\n###\n";
-    file.close();
-
-    // Create config
-    if (!setConfig())
-        return false;
-
-    return true;
-}
-
-
-
-bool performPull() {
-    QString repositoryState;
-    QStringList removeDummies, packages;
-    QStringList dummyFiles = QDir(QDir::currentPath()).entryList(QString(BOXIT_FILE_FILTERS_WITH_SIG).split(" ", QString::SkipEmptyParts), QDir::NoDotAndDotDot | QDir::Files | QDir::System, QDir::Name);
-
-    // Get repository state
-    if (!getRepositoryState(repositoryState, config.repository, config.architecture))
-        return false; // Error messages are handled by the function
-
-    // Get remote packages
-    if (!getRemoteFiles(packages, config.repository, config.architecture))
-        return false; // Error messages are handled by the function
-
-
-    for (int i = 0; i < dummyFiles.size(); ++i) {
-        QString currentDummy = dummyFiles.at(i);
-        QFileInfo info(currentDummy);
-
-        if (!packages.contains(currentDummy) || !info.isSymLink() || !info.symLinkTarget().endsWith(BOXIT_DUMMY_FILE))
-            removeDummies.append(currentDummy);
-        else
-            packages.removeAll(currentDummy);
-    }
-
-    if (config.state == repositoryState && removeDummies.size() == 0 && packages.size() == 0) {
-        cout << "repository is up-to-date!" << endl;
-        return true;
-    }
-    else if (config.state == repositoryState && (removeDummies.size() != 0 || packages.size() != 0)) {
-        cout << "warning: repository is up-to-date but files don't match with the remote ones!" << endl;
-    }
-
-
-
-    // Inform user
-    while (true) {
-        QString answer = getInput("Remove " + QString::number(removeDummies.size()) + " local file(s) and create " + QString::number(packages.size()) + " dummy file(s)? [Y/n/d] (d=details) ", false, false).toLower().trimmed();
-        if (answer == "d") {
-            if (!packages.isEmpty()) {
-                cout << endl << "dummy file(s) to create:" << endl << endl;
-
-                for (int i = 0; i < packages.size(); ++i) {
-                    cout << "   " << packages.at(i).toAscii().data() << endl;
-                }
-            }
-
-            if (!removeDummies.isEmpty()) {
-                cout << endl << "local file(s) to remove:" << endl << endl;
-
-                for (int i = 0; i < removeDummies.size(); ++i) {
-                    cout << "   " << removeDummies.at(i).toAscii().data() << endl;
-                }
-            }
-
-            cout << endl;
-            continue;
-        }
-        else if (!answer.isEmpty() && answer != "y") {
-            cerr << "abording..." << endl;
-            return false;
-        }
-        else {
-            break;
-        }
-    }
-
-
-    // Remove files
-    for (int i = 0; i < removeDummies.size(); ++i) {
-        if (!QFile::remove(removeDummies.at(i))) {
-            cerr << "error: failed to remove '" << removeDummies.at(i).toAscii().data() << "'!" << endl;
-            return false;
-        }
-    }
-
-    // Create dummies
-    QFile dummyFile(BOXIT_DUMMY_FILE);
-    for (int i = 0; i < packages.size(); ++i) {
-        if (!dummyFile.link(packages.at(i))) {
-            cerr << "error: failed to create symlink '" << packages.at(i).toAscii().data() << "'!" << endl;
-            return false;
-        }
-    }
-
-
-    // Set repository state and update config
-    config.state = repositoryState;
-    if (!setConfig()) {
-        cerr << "error: failed to update config!" << endl;
-        return false;
-    }
-
-
-    cout << "repository is up-to-date now!" << endl;
-    return true;
-}
-
-
-
-bool performPush() {
-    // Get repository state
-    QString repositoryState;
-    if (!getRepositoryState(repositoryState, config.repository, config.architecture))
-        return false; // Error messages are handled by the function
-
-    if (repositoryState != config.state) {
-        cerr << "error: repository is not up-to-date! Perform a pull action first!" << endl;
-        return false;
-    }
-
-
-    QStringList addPackages, removePackages, remotePackages;
-    QStringList dummyFiles = QDir(QDir::currentPath()).entryList(QString(BOXIT_FILE_FILTERS_WITH_SIG).split(" ", QString::SkipEmptyParts), QDir::NoDotAndDotDot | QDir::Files | QDir::System, QDir::Name);
-
-
-    // Get remote packages
-    if (!getRemoteFiles(remotePackages, config.repository, config.architecture))
-        return false; // Error messages are handled by the function
-
-
-    // Find all added packages
-    for (int i = 0; i < dummyFiles.size(); ++i) {
-        QString currentFile = dummyFiles.at(i);
-        QFileInfo fileInfo(currentFile);
-
-        if (remotePackages.contains(currentFile) && fileInfo.isSymLink())
-                continue;
-
-        if (!fileInfo.isFile() || fileInfo.isSymLink()) {
-            cerr << "error: file '" << currentFile.toAscii().data() << "' is not a valid file!" << endl;
-            return false;
-        }
-
-        addPackages.append(currentFile);
-    }
-
-
-    // Find all removed packages
-    for (int i = 0; i < remotePackages.size(); ++i) {
-        QString currentFile = remotePackages.at(i);
-
-        if (!dummyFiles.contains(currentFile))
-            removePackages.append(currentFile);
-    }
-
-
-    if (removePackages.isEmpty() && addPackages.isEmpty()) {
-        cerr << "nothing to do!" << endl;
-        return false;
-    }
-
-
-
-    // Inform user
-    while (true) {
-        QString answer = getInput("Remove " + QString::number(removePackages.size()) + " remote file(s) and upload " + QString::number(addPackages.size()) + " package(s) ? [Y/n/d] (d=details) ", false, false).toLower().trimmed();
-        if (answer == "d") {
-            if (!removePackages.isEmpty()) {
-                cout << endl << "remote packages to remove:" << endl << endl;
-
-                for (int i = 0; i < removePackages.size(); ++i) {
-                    cout << "   " << removePackages.at(i).toAscii().data() << endl;
-                }
-            }
-
-            if (!addPackages.isEmpty()) {
-                cout << endl << "packages to upload:" << endl << endl;
-
-                for (int i = 0; i < addPackages.size(); ++i) {
-                    cout << "   " << addPackages.at(i).toAscii().data() << endl;
-                }
-            }
-
-            cout << endl;
-            continue;
-        }
-        else if (!answer.isEmpty() && answer != "y") {
-            cerr << "abording..." << endl;
-            return false;
-        }
-        else {
-            break;
-        }
-    }
-
-
-    // Lock repository
-    if (!lockPool(config.repository, config.architecture))
-        return false; // Error messages are printed by the function
-
-
-    // Send all packages to remove
-    for (int i = 0; i < removePackages.size(); ++i) {
-        boxitSocket.sendData(MSG_REMOVE_PACKAGE, QByteArray(removePackages.at(i).toAscii()));
-        boxitSocket.readData(msgID);
-
-        if (msgID != MSG_SUCCESS) {
-            cerr << "error: failed to send remove request to server!" << endl;
-            return false;
-        }
-    }
-
-
-    // Upload new packages
-    for (int i = 0; i < addPackages.size(); ++i) {
-        if (!uploadData(addPackages.at(i)))
-            return false; // Error handling is done by the function
-    }
-
-
-    // Commit changes
-    boxitSocket.sendData(MSG_COMMIT);
-    boxitSocket.readData(msgID);
-
-    if (msgID != MSG_SUCCESS) {
-        cerr << "error: failed to start commit process!" << endl;
-        return false;
-    }
-
-    // Unlock repository
-    unlockPool(); // Error messages are printed by the function -> not fatal
-
-
-    // Read process messages
-    if (!printServerMessages(false))
-        return false; // Error handling is done by the function
-
-
-    // Remove files and replace them with dummy files
-    QFile dummyFile(BOXIT_DUMMY_FILE);
-    for (int i = 0; i < addPackages.size(); ++i) {
-        QString file = addPackages.at(i);
-
-        if (QFile::exists(file) && !QFile::remove(file)) {
-            cerr << "error: failed to remove '" << file.toAscii().data() << "'!" << endl;
-            return false;
-        }
-
-        if (!dummyFile.link(file)) {
-            cerr << "error: failed to create symlink '" << file.toAscii().data() << "'!" << endl;
-            return false;
-        }
-    }
-
-
-    // Update repository state
-    if (!getRepositoryState(repositoryState, config.repository, config.architecture))
-        return false; // Error messages are handled by the functio
-
-    // Set repository state and update config
-    config.state = repositoryState;
-    if (!setConfig()) {
-        cerr << "error: failed to update config!" << endl;
-        return false;
-    }
-
-
-    cout << "successfully committed changes!" << endl;
-    return true;
-}
-
-
-
-bool uploadData(QString path) {
-    if (!QFile::exists(path)) {
-        cerr << "error: file not found '" << path.toAscii().data() << "'" << endl;
-        return false;
-    }
-
-    QFile file(path);
-    if (!file.open(QIODevice::ReadOnly)) {
-        cerr << "error: failed to open file '" << path.toAscii().data() << "'" << endl;
-        return false;
-    }
-
-    QString uploadFileName = path.split("/", QString::SkipEmptyParts).last();
-
-
-    // Tell the server the file checksum
-    boxitSocket.sendData(MSG_FILE_CHECKSUM, sha1CheckSum(file.fileName()));
-    boxitSocket.readData(msgID);
-
-    if (msgID != MSG_SUCCESS) {
-        cerr << "\nerror: server failed to obtain file checksum!" << endl;
-        return false;
-    }
-
-
-    boxitSocket.sendData(MSG_FILE_UPLOAD, QByteArray(uploadFileName.toAscii()));
-    boxitSocket.readData(msgID);
-
-    if (msgID == MSG_FILE_ALREADY_EXISTS) {
-        cout << "'" << uploadFileName.toAscii().data() << "' already exists (100%)" << endl;
-        return true;
-    }
-    else if (msgID != MSG_SUCCESS) {
-        cerr << "error: server failed to obtain file '" << path.toAscii().data() << "'" << endl;
-        return false;
-    }
-
-    int dataSizeWritten = 0;
-
-    while(!file.atEnd()) {
-        data = file.read(50000);
-        boxitSocket.sendData(MSG_DATA_UPLOAD, data);
-        dataSizeWritten += data.size();
-
-        cout << "\r" << flush;
-        cout << "uploading '" << uploadFileName.toAscii().data() << "' (" << dataSizeWritten/(file.size()/100) << "%)" << flush;
-    }
-    file.close();
-
-    // Tell the server that we finished...
-    boxitSocket.sendData(MSG_DATA_UPLOAD_FINISH);
-    boxitSocket.readData(msgID);
-
-    if (msgID == MSG_ERROR_CHECKSUM_WRONG) {
-        cerr << "\nerror: uploaded file is corrupted '" << path.toAscii().data() << "'" << endl;
-        return false;
-    }
-    else if (msgID != MSG_SUCCESS) {
-        cerr << "\nerror: server failed to obtain file '" << path.toAscii().data() << "'" << endl;
-        return false;
-    }
-
-    cout << "\r" << flush;
-    cout << "upload '" << uploadFileName.toAscii().data() << "' complete (100%)" << endl;
-    return true;
-}
-
-
-
-void resetServerTimeout() {
-    if (boxitSocket.state() == QAbstractSocket::ConnectedState)
-        boxitSocket.sendData(MSG_RESET_TIMEOUT);
-}
-
-
-
-
-
-
-
-//###
-//### Shell Section
-//###
-
-
-
-
-bool runShell() {
-    // Init
-    editorProcess = new InteractiveProcess(qApp);
-
-    // Connect to host
-    if (!connectAndLoginToHost(getInput("host: ", false, false).trimmed()))
-        return false; // Error messages are printed by the function
-
-    //  Draw Logo
-    write(1,"\E[H\E[2J",7);
-    drawLogo();
-
-
-    QStringList input;
-
-    while (boxitSocket.state() == QAbstractSocket::ConnectedState) {
-        data.clear();
-
-        // Get user input
-        input = getInput("[" + username + "@BoxIt]$ ").trimmed().split(" ", QString::SkipEmptyParts);
-
-
-
-        // Read user input
-        if (input.isEmpty()) {
-            continue;
-        }
-        else if (input.at(0) == "clear") {
-            write(1,"\E[H\E[2J",7);
-        }
-        else if (input.at(0) == "quit" || input.at(0) == "exit") {
-            // Cleanup
-            delete editorProcess;
-
-            // Disconnect
-            boxitSocket.disconnectFromHost();
-
-            cout << "Good bye!" << endl;
-            qApp->quit();
-            return true;
-        }
-        else if (input.at(0) == "help") {
-            drawLogo();
-            cout << "Roland Singer <roland@manjaro.org>" << endl << endl;
-
-            cout << "Usage: [COMMAND] [OPTIONS] [...]" << endl << endl;
-            cout << "  clear\t\t\tclear terminal" << endl;
-            cout << "  quit/exit\t\texit shell" << endl;
-            cout << "  help\t\t\tshow help" << endl;
-            cout << "  passwd\t\tchange password" << endl;
-            cout << "  list\t\t\tshow available repositories" << endl;
-            cout << "  sync [package] [...]\tsynchronise repository" << endl;
-            cout << "  merge\t\t\tmerge repository with another one" << endl;
-            cout << "  addrepo\t\tadd repository" << endl;
-            cout << "  syncurl\t\tshow and change repository synchronization url" << endl;
-            cout << "  exedit\t\tchange repository exclude file" << endl;
-            cout << "  kill\t\t\tkill pool process" << endl;
-            cout << "  pshow\t\t\tshow pool process output" << endl;
-            cout << "  state\t\t\tshow pool process state" << endl;
-            cout << "  cmp\t\t\tcompare repositories" << endl;
-            cout << endl;
-        }
-        else if (input.at(0) == "passwd") {
-            QString oldPasswd = getInput("old password: ", true, false);
-            QString newPasswd = getInput("new password: ", true, false);
-            QString confirmNewPasswd = getInput("confirm password: ", true, false);
-
-            if (newPasswd != confirmNewPasswd) {
-                cerr << "error: entered passwords are not equal!" << endl;
-                continue;
-            }
-            else if (newPasswd.size() < 6) {
-                cerr << "error: new password is too short! Use at least 6 words..." << endl;
-                continue;
-            }
-            else if (newPasswd == oldPasswd) {
-                cerr << "error: new password is equal to the current password!" << endl;
-                continue;
-            }
-
-            // Create the password hash
-            oldPasswd = QString(QCryptographicHash::hash(oldPasswd.toLocal8Bit(), QCryptographicHash::Sha1).toHex());
-            newPasswd = QString(QCryptographicHash::hash(newPasswd.toLocal8Bit(), QCryptographicHash::Sha1).toHex());
-
-            boxitSocket.sendData(MSG_SET_PASSWD, QByteArray(QString(oldPasswd + BOXIT_SPLIT_CHAR + newPasswd).toAscii()));
-            boxitSocket.readData(msgID);
-
-            if (msgID == MSG_ERROR_WRONG_PASSWORD) {
-                cerr << "error: entered password was wrong!" << endl;
-                continue;
-            }
-            else if (msgID != MSG_SUCCESS) {
-                cerr << "error: failed to set new password!" << endl;
-                continue;
-            }
-
-            cout << "successfully changed password!" << endl;
-        }
-        else if (input.at(0) == "state") {
-            boxitSocket.sendData(MSG_POOL_STATE);
-            boxitSocket.readData(msgID, data);
-
-            QStringList split = QString(data).split(BOXIT_SPLIT_CHAR, QString::SkipEmptyParts);
-
-            if (split.size() < 3) {
-                cout << QString(data).toAscii().data() << endl;
-            }
-            else {
-                consoleFill('-', 79);
-                cout << setw(26) << "JOB" << setw(26) << "STATE" << setw(26) << "BY USER" << endl;
-                consoleFill('-', 79);
-
-                cout << setw(26) << split.at(0).toAscii().data();
-                cout << setw(26) << split.at(1).toAscii().data();
-                cout << setw(26) << split.at(2).toAscii().data() << endl << endl;
-            }
-        }
-        else if (input.at(0) == "list") {
-            boxitSocket.sendData(MSG_REQUEST_LIST);
-            boxitSocket.readData(msgID, data);
-
-            QStringList split;
-            bool firstRepo = true;
-
-            while (msgID == MSG_LIST_REPO) {
-                if (firstRepo) {
-                    cout << endl;
-                    consoleFill('-', 79);
-                    cout << setw(40) << "REPO" << setw(20) << "ARCH" << endl;
-                    consoleFill('-', 79);
-                    firstRepo = false;
-                }
-
-                split = QString(data).split(BOXIT_SPLIT_CHAR, QString::SkipEmptyParts);
-
-                if (split.size() < 2) {
-                    cout << QString(data).toAscii().data() << endl;
-                }
-                else {
-                    cout << setw(40) << split.at(0).toAscii().data();
-                    cout << setw(20) << split.at(1).toAscii().data() << endl;
-                }
-
-
-                boxitSocket.readData(msgID, data);
-            }
-
-            cout << endl;
-
-            if (msgID != MSG_SUCCESS) {
-                cerr << "error: failed to get repository list!" << endl;
-                continue;
-            }
-        }
-        else if (input.at(0) == "cmp") {
-            QString firstName = getInput("1. repository name: ", false, false).trimmed();
-            QString firstArchitecture = getInput("1. repository architectures: ", false, false).trimmed();
-            QString secondName = getInput("2. repository name: ", false, false).trimmed();
-            QString secondArchitecture = getInput("2. repository architectures: ", false, false).trimmed();
-
-            // Perform basic checks
-            if (!basicInputCheck(firstName, firstArchitecture) || !basicInputCheck(secondName, secondArchitecture))
-                continue; // Error messages are printed by the function
-
-            QStringList firstPackages, secondPackages;
-
-            if (!getRemotePackages(firstPackages, firstName, firstArchitecture) || !getRemotePackages(secondPackages, secondName, secondArchitecture))
-                continue; // Error messages are printed by the function
-
-            firstPackages.removeDuplicates();
-            firstPackages.sort();
-            secondPackages.removeDuplicates();
-            secondPackages.sort();
-
-            cout << endl;
-            consoleFill('-', 79);
-            cout << setw(30) << "PACKAGE" << setw(24) << "VERSION 1. REPO" << setw(24) << "VERSION 2. REPO" << endl;
-            consoleFill('-', 79);
-
-
-            for (int i = 0; i < firstPackages.size(); ++i) {
-                QString package = firstPackages.at(i);
-                QString name = getNameofPKG(package);
-
-                cout << setw(30) << name.toAscii().data() << setw(24) << getVersionofPKG(package).toAscii().data();
-
-                for (int i = 0; i < secondPackages.size(); ++i) {
-                    QString package = secondPackages.at(i);
-                    QString secondName = getNameofPKG(package);
-
-                    if (name != secondName)
-                        continue;
-
-                    cout << setw(24) << getVersionofPKG(package).toAscii().data();
-                    break;
-                }
-
-                cout << endl;
-            }
-
-            for (int i = 0; i < secondPackages.size(); ++i) {
-                QString package = secondPackages.at(i);
-                QString name = getNameofPKG(package);
-                bool found = false;
-
-                for (int i = 0; i < firstPackages.size(); ++i) {
-                    QString package = firstPackages.at(i);
-                    QString firstName = getNameofPKG(package);
-
-                    if (firstName == name) {
-                        found = true;
-                        break;
-                    }
-                }
-
-                if (!found)
-                    cout << setw(30) << name.toAscii().data() << setw(48) << getVersionofPKG(package).toAscii().data() << endl;
-            }
-
-            cout << endl;
-        }
-        else if (input.at(0) == "merge") {
-            QString srcName = getInput("source repository name: ", false, false).trimmed();
-            QString destName = getInput("destination repository name: ", false, false).trimmed();
-            QString architecture = getInput("repository architectures: ", false, false).trimmed();
-
-            // Perform basic checks
-            if (!basicInputCheck(srcName, architecture) || !basicInputCheck(destName, architecture))
-                continue; // Error messages are printed by the function
-
-            QString answer = getInput("Continue merging? [Y/n] ", false, false).toLower().trimmed();
-            if (!answer.isEmpty() && answer != "y") {
-                cerr << "abording..." << endl;
-                continue;
-            }
-
-            // Send data
-            boxitSocket.sendData(MSG_REPO_MERGE, QByteArray(QString(srcName + BOXIT_SPLIT_CHAR + architecture + BOXIT_SPLIT_CHAR + destName).toAscii()));
-            boxitSocket.readData(msgID);
-
-            if (msgID == MSG_ERROR_POOL_ALREADY_LOCKED) {
-                cerr << "error: pool is in use!" << endl;
-                continue;
-            }
-            else if (msgID == MSG_ERROR_NOT_EXIST) {
-                cerr << "error: one repository does not exist!" << endl;
-                continue;
-            }
-            else if (msgID == MSG_ERROR_IS_BUSY) {
-                cerr << "error: one repository is busy!" << endl;
-                continue;
-            }
-            else if (msgID != MSG_SUCCESS) {
-                cerr << "error: failed to start merge process!" << endl;
-                continue;
-            }
-
-            cout << "Started repository merge process..." << endl;
-
-            // Read process messages
-            if (!printServerMessages(true))
-                continue; // Error handling is done by the function
-        }
-        else if (input.at(0) == "sync") {
-            QString name = getInput("repository name: ", false, false).trimmed();
-            QString architecture = getInput("repository architecture: ", false, false).trimmed();
-
-            // Custom sync packages
-            input.removeFirst();
-            QString customSyncPackages = input.join(" ").trimmed();
-
-            // Perform basic checks
-            if (!basicInputCheck(name, architecture))
-                continue; // Error messages are printed by the function
-
-
-
-            // Inform user to always update the sync exclude list
-            cout << "Repository synchronization exclude list should always be up-to-date!" << endl;
-
-            for (int i=3; i>0; i--) {
-                cout << "\r" << flush;
-                cout << "Wait " << i << " second(s)..." << flush;
-                sleep(1);
-            }
-
-            cout << "\r" << flush;
-
-            QString answer = getInput("Continue synchronization? [Y/n] ", false, false).toLower().trimmed();
-            if (!answer.isEmpty() && answer != "y") {
-                cerr << "abording..." << endl;
-                continue;
-            }
-
-
-            // Send data
-            boxitSocket.sendData(MSG_REPO_SYNC, QByteArray(QString(name + BOXIT_SPLIT_CHAR + architecture + BOXIT_SPLIT_CHAR + customSyncPackages).toAscii()));
-            boxitSocket.readData(msgID);
-
-            if (msgID == MSG_ERROR_POOL_ALREADY_LOCKED) {
-                cerr << "error: pool is in use!" << endl;
-                continue;
-            }
-            else if (msgID == MSG_ERROR_NOT_EXIST) {
-                cerr << "error: repository does not exist!" << endl;
-                continue;
-            }
-            else if (msgID == MSG_ERROR_IS_BUSY) {
-                cerr << "error: repository is busy!" << endl;
-                continue;
-            }
-            else if (msgID == MSG_ERROR_NO_SYNC_REPO) {
-                cerr << "error: repository does not have a synchronization url!" << endl;
-                continue;
-            }
-            else if (msgID != MSG_SUCCESS) {
-                cerr << "error: failed to start synchronization process!" << endl;
-                continue;
-            }
-
-            cout << "Started repository synchronization process..." << endl;
-
-            // Read process messages
-            if (!printServerMessages(true))
-                continue; // Error handling is done by the function
-        }
-        else if (input.at(0) == "kill") {
-            QString answer = getInput("Do you really want to kill the pool process? [y/N] ", false, false).toLower().trimmed();
-            if (answer.isEmpty() || answer != "y") {
-                cerr << "abording..." << endl;
-                continue;
-            }
-
-            // Send data
-            boxitSocket.sendData(MSG_KILL);
-            boxitSocket.readData(msgID);
-
-            if (msgID == MSG_ERROR_NOT_BUSY) {
-                cerr << "error: pool process is not running!" << endl;
-                continue;
-            }
-            else if (msgID != MSG_SUCCESS) {
-                cerr << "error: failed to kill pool process!" << endl;
-                continue;
-            }
-
-            cout << "Successfully killed repository process!" << endl;
-        }
-        else if (input.at(0) == "pshow") {
-            if (!printServerMessages(true))
-                continue; // Error messages are printed by the function
-        }
-        else if (input.at(0) == "addrepo") {
-            QString name = getInput("repository name: ", false, false).trimmed();
-            QString architecture = getInput("repository architecture: ", false, false).trimmed();
-            QString syncURL = getInput("synchronization url (leave blank to disable): ", false, false).trimmed();
-
-            // Perform basic checks
-            if (!basicInputCheck(name, architecture))
-                continue; // Error messages are printed by the function
-            else if (!syncURL.isEmpty()
-                     && (!syncURL.contains("@")
-                         || (!syncURL.split("@", QString::SkipEmptyParts).last().startsWith("http://")
-                             && !syncURL.split("@", QString::SkipEmptyParts).last().startsWith("ftp://")))) {
-                cerr << "error: synchronization url is invalid!\nsample: reponame@http://host.org/repo or reponame@ftp://host.org/repo" << endl;
-                continue;
-            }
-
-            // Question
-            QString answer = getInput(QString("Create repository '%1 %2'? [y/N] ").arg(name, architecture), false, false).toLower().trimmed();
-            if (answer.isEmpty() || answer != "y") {
-                cerr << "abording..." << endl;
-                continue;
-            }
-
-
-            // Send data
-            boxitSocket.sendData(MSG_REPO_ADD, QByteArray(QString(name + BOXIT_SPLIT_CHAR + architecture).toAscii()));
-            boxitSocket.readData(msgID);
-
-            if (msgID == MSG_ERROR_ALREADY_EXIST) {
-                cerr << "error: repository already exists!" << endl;
-                continue;
-            }
-            else if (msgID == MSG_ERROR_IS_BUSY) {
-                cerr << "error: repository is busy!" << endl;
-                continue;
-            }
-            else if (msgID != MSG_SUCCESS) {
-                cerr << "error: failed to create new repository!" << endl;
-                continue;
-            }
-
-
-            // Set sync url if not empty
-            if (!syncURL.isEmpty()) {
-                boxitSocket.sendData(MSG_REPO_CHANGE_SYNC_URL, QByteArray(QString(name + BOXIT_SPLIT_CHAR + architecture + BOXIT_SPLIT_CHAR + syncURL).toAscii()));
-                boxitSocket.readData(msgID);
-
-                if (msgID == MSG_ERROR_NOT_EXIST) {
-                    cerr << "error: repository does not exist!" << endl;
-                    continue;
-                }
-                else if (msgID == MSG_ERROR_IS_BUSY) {
-                    cerr << "error: repository is busy!" << endl;
-                    continue;
-                }
-                else if (msgID != MSG_SUCCESS) {
-                    cerr << "error: failed to set new repository synchronization url!" << endl;
-                    continue;
-                }
-            }
-
-
-            cout << "Successfully added new repository!" << endl;
-        }
-        else if (input.at(0) == "syncurl") {
-            QString name = getInput("repository name: ", false, false).trimmed();
-            QString architecture = getInput("repository architecture: ", false, false).trimmed();
-
-            // Perform basic checks
-            if (!basicInputCheck(name, architecture))
-                continue; // Error messages are printed by the function
-
-
-            // Get sync url
-            boxitSocket.sendData(MSG_REPO_GET_SYNC_URL, QByteArray(QString(name + BOXIT_SPLIT_CHAR + architecture).toAscii()));
-            boxitSocket.readData(msgID, data);
-
-            if (msgID == MSG_ERROR_NOT_EXIST) {
-                cerr << "error: repository does not exist!" << endl;
-                continue;
-            }
-            else if (msgID == MSG_ERROR_IS_BUSY) {
-                cerr << "error: repository is busy!" << endl;
-                continue;
-            }
-            else if (msgID != MSG_SUCCESS) {
-                cerr << "error: failed to get repository synchronization url!" << endl;
-                continue;
-            }
-
-            if (QString(data).isEmpty())
-                cout << "no synchronization url" << endl;
-            else
-                cout << "synchronization url: " << QString(data).toAscii().data() << endl;
-
-
-            // Question
-            QString answer = getInput(QString("Change synchronization url [y/N] "), false, false).toLower().trimmed();
-            if (answer.isEmpty() || answer != "y")
-                continue;
-
-
-            // Set new sync url
-            QString syncURL = getInput("new synchronization url (leave blank to disable): ", false, false).trimmed();
-
-            if (syncURL.isEmpty()) {
-                syncURL = "!";
-            }
-            else if (!syncURL.contains("@")
-                     || (!syncURL.split("@", QString::SkipEmptyParts).last().startsWith("http://")
-                         && !syncURL.split("@", QString::SkipEmptyParts).last().startsWith("ftp://"))) {
-                cerr << "error: synchronization url is invalid!\nsample: reponame@http://host.org/repo or reponame@ftp://host.org/repo" << endl;
-                continue;
-            }
-
-
-            boxitSocket.sendData(MSG_REPO_CHANGE_SYNC_URL, QByteArray(QString(name + BOXIT_SPLIT_CHAR + architecture + BOXIT_SPLIT_CHAR + syncURL).toAscii()));
-            boxitSocket.readData(msgID);
-
-            if (msgID == MSG_ERROR_NOT_EXIST) {
-                cerr << "error: repository does not exist!" << endl;
-                continue;
-            }
-            else if (msgID == MSG_ERROR_IS_BUSY) {
-                cerr << "error: repository is busy!" << endl;
-                continue;
-            }
-            else if (msgID != MSG_SUCCESS) {
-                cerr << "error: failed to set new repository synchronization url!" << endl;
-                continue;
-            }
-
-            cout << "Successfully changed repository synchronization url!" << endl;
-        }
-        else if (input.at(0) == "exedit") {
-            QString name = getInput("repository name: ", false, false).trimmed();
-            QString architecture = getInput("repository architecture: ", false, false).trimmed();
-
-            // Perform basic checks
-            if (!basicInputCheck(name, architecture))
-                continue; // Error messages are printed by the function
-
-            boxitSocket.sendData(MSG_GET_EXCLUDE_CONTENT, QByteArray(QString(name + BOXIT_SPLIT_CHAR + architecture).toAscii()));
-            boxitSocket.readData(msgID, data);
-
-            if (msgID == MSG_ERROR_NOT_EXIST) {
-                cerr << "error: repository does not exist!" << endl;
-                continue;
-            }
-            else if (msgID == MSG_ERROR_IS_BUSY) {
-                cerr << "error: repository is busy!" << endl;
-                continue;
-            }
-            else if (msgID != MSG_SUCCESS) {
-                cerr << "error: failed to get exclude content!" << endl;
-                continue;
-            }
-
-            // Write content to temporary file to edit it
-            QFile file("/tmp/.boxit-" + QString::number(qrand()));
-            if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
-                cerr << "error: failed to create file '" << file.fileName().toAscii().data() << "'!" << endl;
-                continue;
-            }
-
-            QTextStream out(&file);
-            out << QString(data);
-            file.close();
-
-
-            // Get editor to use
-            QString editor = getInput("editor: ", false, false).trimmed();
-
-
-            // Set our interrupt signal
-            signal(SIGINT, interruptEditorProcess);
-
-            cout << "kill editor with CTRL+C" << endl;
-
-            editorProcess->start(editor, QStringList() << file.fileName());
-            editorProcess->waitForStarted();
-
-            while(editorProcess->state() == QProcess::Running) {
-                // Reset our server timeout to keep our session alive!
-                resetServerTimeout();
-
-                // wait...
-                editorProcess->waitForFinished(5000);
-            }
-
-            // Reset our interrupt signal
-            signal(SIGINT, SIG_DFL);
-
-            // Warn user on possible process fail
-            if (editorProcess->exitCode() != 0)
-                cerr << "warning: process might failed!" << endl;
-
-            // Get file content
-            if (!file.open(QIODevice::ReadOnly | QIODevice::Text)){
-                cerr << "error: failed to read file content!" << endl;
-                continue;
-            }
-
-            QTextStream in(&file);
-            QString content = in.readAll();
-            file.close();
-
-            // Remove file again
-            file.remove();
-
-            // Just wait, so we don't get fails keyboard inputs
-            usleep(100000);
-
-            // Ask user to upload new content
-            QString answer = getInput("Upload new content? [Y/n] ", false, false).toLower().trimmed();
-            if (!answer.isEmpty() && answer != "y") {
-                cerr << "abording..." << endl;
-                continue;
-            }
-
-            // Upload new content
-            boxitSocket.sendData(MSG_SET_EXCLUDE_CONTENT, QByteArray(QString(name + BOXIT_SPLIT_CHAR + architecture + BOXIT_SPLIT_CHAR + content).toAscii()));
-            boxitSocket.readData(msgID, data);
-
-            if (msgID == MSG_ERROR_NOT_EXIST) {
-                cerr << "error: repository does not exist!" << endl;
-                continue;
-            }
-            else if (msgID == MSG_ERROR_IS_BUSY) {
-                cerr << "error: repository is busy!" << endl;
-                continue;
-            }
-            else if (msgID != MSG_SUCCESS) {
-                cerr << "error: failed to set new exclude content!" << endl;
-                continue;
-            }
-
-            cout << "Successfully changed new exclude content!" << endl;
-        }
-        else {
-            cout << "unkown command" << endl;
-        }
-    }
-
-    // Cleanup
-    delete editorProcess;
-
-    return true;
-}
-
-
-
-inline bool basicInputCheck(QString &repository, QString &architecture) {
-    // Perform basic checks
-    if (repository.isEmpty() || architecture.isEmpty()) {
-        cerr << "error: name and architecture can't be empty!" << endl;
-        return false;
-    }
-    else if (!QString(BOXIT_ARCHITECTURES).split(" ", QString::SkipEmptyParts).contains(architecture)) {
-        cerr << "error: invalid architecture!\navailable architectures: " << BOXIT_ARCHITECTURES << endl;
-        return false;
-    }
-
-    return true;
-}
-
-
-
-
-
 //###
 //### Input
 //###
@@ -2007,17 +435,13 @@ void consoleFill(char fill, int wide) {
 
 
 
-QString getInput(QString beg, bool hide, bool addToHistory, bool resetTimeout) {
-    // Reset server timeout
-    if (resetTimeout)
-        resetServerTimeout();
-
+QString getInput(QString beg, bool hide, bool addToHistory) {
     QString str;
 
     if (hide)
         consoleEchoMode(false);
 
-    str = QString(readline(beg.toAscii().data()));
+    str = QString(readline(beg.toUtf8().data()));
 
     if (hide) {
         consoleEchoMode(true);
@@ -2030,7 +454,7 @@ QString getInput(QString beg, bool hide, bool addToHistory, bool resetTimeout) {
     }
 
     if (!str.isEmpty() && addToHistory)
-        add_history(str.trimmed().toAscii().data());
+        add_history(str.trimmed().toUtf8().data());
 
     return str;
 }
@@ -2105,4 +529,1834 @@ void * xmalloc (int size)
     }
 
     return buf;
+}
+
+
+
+//###
+//### General socket operations
+//###
+
+
+bool connectAndLoginToHost(QString host) {
+    cout << "\r" << flush;
+    cout << QString(":: Connecting to host %1...").arg(host.trimmed()).toUtf8().data() << flush;
+
+    // Connect to host
+    if (!boxitSocket.connectToHost(host))
+        return false; // Error messages are printed by the boxit socket class
+
+    cout << "\r" << flush;
+    cout << QString(":: Connected to host %1     ").arg(host.trimmed()).toUtf8().data() << endl;
+
+
+    // First send our boxit version to the server
+    boxitSocket.sendData(MSG_CHECK_VERSION, QByteArray(QString::number((int)BOXIT_VERSION).toAscii()));
+    boxitSocket.readData(msgID);
+    if (msgID != MSG_SUCCESS) {
+        cerr << "error: the BoxIt server is running a different version! Abording..." << endl;
+        goto error;
+    }
+
+
+    // Let's login now
+    for (int i=0;; i++) {
+        username = getInput(" username: ", false, false);
+        QString password = QString(QCryptographicHash::hash(getInput(" password: ", true, false).toLocal8Bit(), QCryptographicHash::Sha1).toHex());
+
+        boxitSocket.sendData(MSG_AUTHENTICATE, QByteArray(QString(username + BOXIT_SPLIT_CHAR + password).toAscii()));
+        boxitSocket.readData(msgID);
+
+        if (msgID == MSG_SUCCESS) {
+            break;
+        }
+        else {
+            cerr << "error: failed to login!" << endl;
+            if (i>1)
+                goto error;
+        }
+    }
+
+
+    return true;
+
+error:
+    // Disconnect from server
+    boxitSocket.disconnectFromHost();
+    return false;
+}
+
+
+
+bool connectIfRequired(QString & host) {
+    if (boxitSocket.state() == QAbstractSocket::ConnectedState)
+        return true;
+
+    if (host.isEmpty())
+        host = getInput(" host: ", false, false).trimmed();
+
+    return connectAndLoginToHost(host);
+}
+
+
+
+void resetServerTimeout() {
+    if (boxitSocket.state() == QAbstractSocket::ConnectedState)
+        boxitSocket.sendData(MSG_RESET_TIMEOUT);
+}
+
+
+
+
+//###
+//### Branch operations
+//###
+
+
+
+bool createBranch() {
+    QString host;
+
+    if (!connectIfRequired(host))
+        return false; // Error messages are printed by the method
+
+    // List all available branches
+    QStringList branches;
+
+    if (!getAllRemoteBranches(branches))
+        return false; // Error messages are printed by the method
+
+    cout << ":: Available branches:" << endl << endl;
+    for (int i = 0; i < branches.size(); ++i) {
+        cout << " " << QString::number(i + 1).toUtf8().data() << ") " << branches.at(i).toUtf8().data() << endl;
+    }
+    cout << endl;
+
+
+    // Get user input
+    int index;
+
+    while (true) {
+        index = getInput(":: Branch index: ", false, false).trimmed().toInt();
+
+        if (index <= 0 || index > branches.size()) {
+            cerr << "error: index is invalid!" << endl;
+            continue;
+        }
+
+        break;
+    }
+    --index;
+
+    cout << ":: Initialising branch directory '" << branches.at(index).toUtf8().data() << "'" << endl;
+
+    // Create directory
+    QString path = QDir::currentPath() + "/" + branches.at(index);
+
+    if (QDir(path).exists()) {
+        cerr << "error: directory '" << path.toUtf8().data() << "' already exists!" << endl;
+        return false;
+    }
+
+    if (!QDir(path).mkdir(path)) {
+        cerr << "error: failed to create directory '" << path.toUtf8().data() << "'!" << endl;
+        return false;
+    }
+
+    // Change current working directory
+    if (!QDir::setCurrent(path)) {
+        cerr << "error: failed to change current working directory!" << endl;
+        return false;
+    }
+
+    // Setup branch struct
+    branch.name = branches.at(index);
+    branch.serverURL = host;
+    branch.path = QDir::currentPath();
+    branch.configPath = branch.path + "/" + BOXIT_DIR;
+
+    // Pull branch
+    if (!pullBranch())
+        return false; // Error messages are printed by the method
+
+    return true;
+}
+
+
+
+bool initBranch(const QString path) {
+    branch.repos.clear();
+    branch.path = path;
+    branch.configPath = path + "/" + BOXIT_DIR;
+
+    QString configPath = branch.configPath + "/" + BOXIT_CONFIG;
+
+    // Check if .boxit/config exists
+    if (!QFile::exists(configPath)) {
+        cerr << "error: config file '" << configPath.toUtf8().data() << "' does not exists!" << endl;
+        return false;
+    }
+
+    QFile file(configPath);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        cerr << "error: failed to read config file '" << configPath.toUtf8().data() << "'!" << endl;
+        return false;
+    }
+
+    QTextStream in(&file);
+    while (!in.atEnd()) {
+        QString line = in.readLine().split("#", QString::KeepEmptyParts).first().trimmed();
+        if (line.isEmpty() || !line.contains("="))
+            continue;
+
+        QString arg1 = line.split("=").first().toLower().trimmed();
+        QString arg2 = line.split("=").last().trimmed();
+
+        if (arg1 == "server") {
+            branch.serverURL = arg2;
+        }
+        else if (arg1 == "branch") {
+            branch.name = arg2;
+        }
+        else if (arg1 == "repository") {
+            QStringList split = arg2.split(":", QString::SkipEmptyParts);
+            if (split.size() < 2) {
+                cerr << "error: branch config contains an invalid repo variable!" << endl;
+                return false;
+            }
+
+            Repo repo;
+            repo.name = split.at(0).trimmed();
+            repo.architecture = split.at(1).trimmed();
+            repo.path = branch.path + "/" + repo.name + "/" + repo.architecture;
+            repo.isSyncRepo = false;
+
+            branch.repos.append(repo);
+        }
+    }
+
+    file.close();
+
+    if (branch.name.isEmpty() || branch.serverURL.isEmpty()) {
+        cerr << "error: branch config '" << configPath.toUtf8().data() << "' is incomplete!" << endl;
+        return false;
+    }
+
+
+    // Fill repositories
+    for (int i = 0; i < branch.repos.size(); ++i) {
+        Repo *repo = &branch.repos[i];
+
+        if (!initRepo(repo)) {
+            cerr << "error: failed to init repository " << repo->name.toUtf8().data() << " " << repo->architecture.toUtf8().data() << "!" << endl;
+            return false;
+        }
+    }
+
+    return true;
+}
+
+
+
+bool initRepo(Repo *repo) {
+    QString configPath = branch.configPath + "/" + repo->name + "_" + repo->architecture;
+
+    // Check if repo config exists
+    if (!QFile::exists(configPath)) {
+        cerr << "error: config file '" << configPath.toUtf8().data() << "' does not exists!" << endl;
+        return false;
+    }
+
+    QFile file(configPath);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        cerr << "error: failed to read config file '" << configPath.toUtf8().data() << "'!" << endl;
+        return false;
+    }
+
+    QTextStream in(&file);
+    while (!in.atEnd()) {
+        QString line = in.readLine().split("#", QString::KeepEmptyParts).first().trimmed();
+        if (line.isEmpty() || !line.contains("="))
+            continue;
+
+        QString arg1 = line.split("=").first().toLower().trimmed();
+        QString arg2 = line.split("=").last().trimmed();
+
+        if (arg1 == "state")
+            repo->state = arg2;
+        else if (arg1 == "sync")
+            repo->isSyncRepo = (bool)arg2.toInt();
+    }
+
+    file.close();
+
+    if (repo->state.isEmpty()) {
+        cerr << "error: repository config '" << configPath.toUtf8().data() << "' is incomplete!" << endl;
+        return false;
+    }
+
+
+    // Obtain overlay packages
+    configPath = branch.configPath + "/" + repo->name + "_" + repo->architecture + "_" + BOXIT_OVERLAY_PACKAGES_CONFIG;
+    if (!readPackagesConfig(configPath, repo->overlayPackages)) {
+        cerr << "error: failed to read overlay packages config '" << configPath.toUtf8().data() << "'!" << endl;
+        return false;
+    }
+
+    // Obtain sync packages if this is a sync repository
+    configPath = branch.configPath + "/" + repo->name + "_" + repo->architecture + "_" + BOXIT_SYNC_PACKAGES_CONFIG;
+    if (repo->isSyncRepo && !readPackagesConfig(configPath, repo->syncPackages)) {
+        cerr << "error: failed to read sync packages config '" << configPath.toUtf8().data() << "'!" << endl;
+        return false;
+    }
+
+    return true;
+}
+
+
+
+bool readPackagesConfig(const QString path, QStringList & packages) {
+    packages.clear();
+
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
+        return false;
+
+    QTextStream in(&file);
+    while (!in.atEnd()) {
+        QString line = in.readLine().trimmed();
+        if (line.isEmpty())
+            continue;
+
+        packages.append(line);
+    }
+
+    file.close();
+
+    return true;
+}
+
+
+
+bool writePackagesConfig(const QString path, const QStringList & packages) {
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text))
+        return false;
+
+    QTextStream out(&file);
+    foreach (const QString package, packages)
+        out << package << "\n";
+
+    file.close();
+
+    return true;
+}
+
+
+
+bool saveBranchConfigs() {
+    // Create config folder is required
+    if (!QDir(branch.configPath).exists() && !QDir().mkdir(branch.configPath)) {
+        cerr << "error: failed to create directory '" << branch.configPath.toUtf8().data() << "'!" << endl;
+        return false;
+    }
+
+
+    // Save branch config
+    QString configPath = branch.configPath + "/" + BOXIT_CONFIG;
+
+    QFile file(configPath);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        cerr << "error: failed to open file '" << configPath.toUtf8().data() << "'!" << endl;
+        return false;
+    }
+
+    QTextStream out(&file);
+    out << "##\n## BoxIt Branch Configuration\n##\n\n";
+    out << "server=" << branch.serverURL << "\n";
+    out << "branch=" << branch.name << "\n";
+    out << "\n# Branch Repositories\n";
+
+    // Add all repositories to branch config
+    for (int i = 0; i < branch.repos.size(); ++i) {
+        const Repo *repo = &branch.repos.at(i);
+        out << "repository=" << repo->name << ":" << repo->architecture << "\n";
+    }
+
+    file.close();
+
+
+    // Remove all other files
+    QStringList files = QDir(branch.configPath).entryList(QDir::Files | QDir::NoDotAndDotDot, QDir::Name);
+
+    foreach (QString file, files) {
+        if (file == BOXIT_CONFIG)
+            continue;
+
+        if (!QFile::remove(branch.configPath + "/" + file)) {
+            cerr << "error: failed to remove file '" << QString(branch.configPath + "/" + file).toUtf8().data() << "'!" << endl;
+            return false;
+        }
+    }
+
+
+    // Create repository configs
+    for (int i = 0; i < branch.repos.size(); ++i) {
+        const Repo *repo = &branch.repos.at(i);
+
+        file.setFileName(branch.configPath + "/" + repo->name + "_" + repo->architecture);
+        if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            cerr << "error: failed to open file '" << file.fileName().toUtf8().data() << "'!" << endl;
+            return false;
+        }
+
+        QTextStream out(&file);
+        out << "##\n## BoxIt Repository Configuration\n##\n\n";
+        out << "state=" << repo->state << "\n";
+        out << "sync=" << QString::number((int)repo->isSyncRepo) << "\n";
+
+        file.close();
+
+        // Save overlay package list
+        QString configPath = branch.configPath + "/" + repo->name + "_" + repo->architecture + "_" + BOXIT_OVERLAY_PACKAGES_CONFIG;
+        if (!writePackagesConfig(configPath, repo->overlayPackages)) {
+            cerr << "error: failed to save overlay package list '" << configPath.toUtf8().data() << "'!" << endl;
+            return false;
+        }
+
+        // Save sync package list
+        configPath = branch.configPath + "/" + repo->name + "_" + repo->architecture + "_" + BOXIT_SYNC_PACKAGES_CONFIG;
+        if (!writePackagesConfig(configPath, repo->syncPackages)) {
+            cerr << "error: failed to save sync package list '" << configPath.toUtf8().data() << "'!" << endl;
+            return false;
+        }
+    }
+
+    // Finally create dummy file
+    if (!QFile::copy(":/resources/resources/dummy.tar.xz", branch.configPath + "/" + BOXIT_DUMMY_FILE)) {
+        cerr << "error: failed to create dummy file '" << QString(branch.configPath + "/" + BOXIT_DUMMY_FILE).toUtf8().data() << "'!" << endl;
+        return false;
+    }
+
+    // Fix file permission
+    fixFilePermission(branch.configPath + "/" + BOXIT_DUMMY_FILE);
+
+    return true;
+}
+
+
+
+bool getAllRemoteBranches(QStringList & branches) {
+    branches.clear();
+
+    boxitSocket.sendData(MSG_GET_BRANCHES);
+    boxitSocket.readData(msgID, data);
+
+    while (msgID == MSG_DATA_BRANCH) {
+        branches.append(QString(data));
+        boxitSocket.readData(msgID, data);
+    }
+
+    if (msgID != MSG_SUCCESS) {
+        cerr << "error: failed to obtain remote branches!" << endl;
+        return false;
+    }
+
+    return true;
+}
+
+
+
+bool fillBranchRepos(Branch & branch, bool withPackages) {
+    cout << " obtaining remote repository packages..." << endl;
+
+    branch.repos.clear();
+
+    if (withPackages)
+        msgID = MSG_GET_REPOS_WITH_PACKAGES;
+    else
+        msgID = MSG_GET_REPOS;
+
+    boxitSocket.sendData(msgID, QByteArray(branch.name.toAscii()));
+    boxitSocket.readData(msgID, data);
+
+    while (msgID == MSG_DATA_REPO || msgID == MSG_DATA_OVERLAY_PACKAGES || msgID == MSG_DATA_SYNC_PACKAGES) {
+        QStringList split = QString(data).split(BOXIT_SPLIT_CHAR, QString::SkipEmptyParts);
+
+        // Repository
+        if (msgID == MSG_DATA_REPO) {
+            if (split.size() < 4) {
+                cerr << "warning: invalid server reply: MSG_DATA_REPO" << endl;
+                return false;
+            }
+
+            Repo repo;
+            repo.name = split.at(0);
+            repo.architecture = split.at(1);
+            repo.state = split.at(2);
+            repo.isSyncRepo = (bool)split.at(3).toInt();
+            repo.path = branch.path + "/" + repo.name + "/" + repo.architecture;
+
+            branch.repos.append(repo);
+        }
+        else if (msgID == MSG_DATA_OVERLAY_PACKAGES) {
+            if (!branch.repos.isEmpty() && !split.isEmpty())
+                branch.repos.last().overlayPackages.append(split);
+        }
+        else if (msgID == MSG_DATA_SYNC_PACKAGES) {
+            if (!branch.repos.isEmpty() && !split.isEmpty())
+                branch.repos.last().syncPackages.append(split);
+        }
+
+        boxitSocket.readData(msgID, data);
+    }
+
+    if (msgID != MSG_SUCCESS) {
+        cerr << "error: failed to obtain remote branch repositories! Does the branch exists?" << endl;
+        return false;
+    }
+
+    return true;
+}
+
+
+
+bool pullBranch() {
+    // Check if connected...
+    if (!connectIfRequired(branch.serverURL))
+        return false; // Error messages are printed by the method
+
+    cout << ":: Pulling changes..." << endl;
+
+
+    // Update branch repositories
+    Branch oldBranch = branch;
+    bool branchIsUpToDate = true;
+
+    if (!fillBranchRepos(branch, true))
+        return false; // Error messages are printed by the method
+
+    // Check if current branch is up-to-date
+    for (int i = 0; i < branch.repos.size(); ++i) {
+        const Repo *remoteRepo = &branch.repos.at(i);
+        bool found = false;
+
+        for (int i = 0; i < oldBranch.repos.size(); ++i) {
+            const Repo *repo = &oldBranch.repos.at(i);
+            if (repo->name != remoteRepo->name || repo->architecture != remoteRepo->architecture)
+                continue;
+
+            if (repo->state != remoteRepo->state) {
+                branchIsUpToDate = false;
+                break;
+            }
+
+            found = true;
+            break;
+        }
+
+        if (!found) {
+            branchIsUpToDate = false;
+            break;
+        }
+    }
+
+
+    // Save new branch configurations
+    if (!saveBranchConfigs())
+        return false; // Error messages are printed by the method
+
+    // Remove all folders except the repo folders
+    QStringList folders = QDir(branch.path).entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
+    for (int i = 0; i < branch.repos.size(); ++i) {
+        folders.removeAll(branch.repos.at(i).name);
+    }
+
+    if (!folders.isEmpty()) {
+        QString answer = getInput(":: " + QString::number(folders.size()) + " orphan folder(s) found which will be removed!\n   Continue? [Y/n] ", false, false).toLower().trimmed();
+        if (!answer.isEmpty() && answer != "y") {
+            cerr << "abording..." << endl;
+            return false;
+        }
+
+        foreach (QString folder, folders) {
+            if (!rmDir(branch.path + "/" + folder)) {
+                cerr << "error: failed to remove directory '" << QString(branch.path + "/" + folder).toUtf8().data() << "'!" << endl;
+                return false;
+            }
+        }
+    }
+
+
+    // Create repository directories
+    for (int i = 0; i < branch.repos.size(); ++i) {
+        const Repo *repo = &branch.repos.at(i);
+
+        if (!QDir(repo->path).exists() && !QDir().mkpath(repo->path)) {
+            cerr << "error: failed to create directory '" << repo->path.toUtf8().data() << "'!" << endl;
+            return false;
+        }
+
+        // Apply Symlinks
+        bool changedFiles;
+        if (!applySymlinks(repo->overlayPackages,
+                           repo->path, "../../" + QString(BOXIT_DIR) + "/" + QString(BOXIT_DUMMY_FILE),
+                           repo->name + "/" + repo->architecture,
+                           changedFiles))
+            return false; // Error messages are printed by the method
+
+        if (changedFiles)
+            branchIsUpToDate = false;
+    }
+
+    if (branchIsUpToDate)
+        cout << ":: Already up-to-date." << endl;
+    else
+        cout << ":: Branch is up-to-date now." << endl;
+
+    return true;
+}
+
+
+
+bool applySymlinks(const QStringList & packages, const QString path, const QString link, const QString coutPath, bool & changedFiles) {
+    changedFiles = false;
+
+    // List of local files in path
+    QStringList localFiles = QDir(path).entryList(QDir::Files | QDir::NoDotAndDotDot, QDir::Name);
+
+    // Remove old files
+    foreach (const QString file, localFiles) {
+        if (packages.contains(file))
+            continue;
+
+        changedFiles = true;
+
+        QString filePath = path + "/" + file;
+        QFileInfo info(filePath);
+
+        cout << "   remove  " << QString(coutPath + "/" + file).toUtf8().data() << endl;
+
+        // Remove file
+        if (info.isSymLink() && unlink(filePath.toStdString().c_str()) != 0) {
+            cerr << "error: failed to remove symlink '" << filePath.toUtf8().data() << "'!" << endl;
+            return false;
+        }
+        else if (info.isFile() && !QFile::remove(filePath)) {
+            cerr << "error: failed to remove file '" << filePath.toUtf8().data() << "'!" << endl;
+            return false;
+        }
+    }
+
+    // Create new symlinks
+    foreach (const QString package, packages) {
+        QString filePath = path + "/" + package;
+        QFileInfo info(filePath);
+
+        if (localFiles.contains(package) && info.isSymLink())
+            continue;
+
+        changedFiles = true;
+
+        if (info.isFile()) {
+            if (!QFile::remove(filePath)) {
+                cerr << "error: failed to remove file '" << filePath.toUtf8().data() << "'!" << endl;
+                return false;
+            }
+
+            cout << "   replace " << QString(coutPath + "/" + package).toUtf8().data() << endl;
+        }
+        else {
+            cout << "   create  " << QString(coutPath + "/" + package).toUtf8().data() << endl;
+        }
+
+        // Symlink package
+        if (!QFile::link(link, filePath)) {
+            cerr << "error: failed to create symlink '" << filePath.toUtf8().data() << "' to '" << link.toUtf8().data() << "'!" << endl;
+            return false;
+        }
+    }
+
+    return true;
+}
+
+
+
+bool pushBranch() {
+    QList<LocalRepo> localRepos;
+    QStringList addFiles, addFilesWithPath, addVirtualPackages, infoAddPackages, infoRemovePackages;
+    bool nothingToDo = true;
+
+    // Get packages of all local repositories
+    for (int i = 0; i < branch.repos.size(); ++i) {
+        Repo *repo = &branch.repos[i];
+        LocalRepo localRepo;
+
+        localRepo.parentRepo = repo;
+        localRepo.name = repo->name;
+        localRepo.architecture = repo->architecture;
+        localRepo.path = repo->path;
+        localRepo.packages = QDir(localRepo.path).entryList(QString(BOXIT_PACKAGE_FILTERS).split(" ", QString::SkipEmptyParts), QDir::Files | QDir::System | QDir::NoDotAndDotDot, QDir::Name);
+        localRepo.signatures = QDir(localRepo.path).entryList(QStringList() << "*" + QString(BOXIT_SIGNATURE_ENDING), QDir::Files | QDir::System | QDir::NoDotAndDotDot, QDir::Name);
+
+        localRepos.append(localRepo);
+    }
+
+    // Check for invalid architectures...
+    if (!checkValidArchitecture(localRepos))
+        return false; // Error messages are printed by the method
+
+    // Check for duplicate packages...
+    if (!checkDuplicatePackages(localRepos))
+        return false; // Error messages are printed by the method
+
+    // Check signatures...
+    if (!checkSignatures(localRepos))
+        return false; // Error messages are printed by the method
+
+    // Check if subrepositories have different packages...
+    if (!checkMatchRepositories(localRepos))
+        return false; // Error messages are printed by the method
+
+    // Check if sync packages are overwritten...
+    if (!checkOverwriteSyncPackages(localRepos))
+        return false; // Error messages are printed by the method
+
+
+    // Get all packages to add and to remove...
+    for (int i = 0; i < localRepos.size(); ++i) {
+        LocalRepo *localRepo = &localRepos[i];
+        QStringList missingSignatures;
+
+        // Get all packages to remove
+        foreach (const QString package, localRepo->parentRepo->overlayPackages) {
+            if (localRepo->packages.contains(package))
+                continue;
+
+            nothingToDo = false;
+            localRepo->removePackages.append(package);
+            infoRemovePackages.append(package);
+        }
+
+        // Get all packages to add
+        foreach (const QString package, localRepo->packages) {
+            if (localRepo->parentRepo->overlayPackages.contains(package))
+                continue;
+
+            nothingToDo = false;
+            localRepo->addPackages.append(package);
+            infoAddPackages.append(package);
+
+            QFileInfo info(localRepo->path + "/" + package);
+
+            if (info.isSymLink()) {
+                addVirtualPackages.append(package);
+            }
+            else {
+                addFiles.append(package);
+                addFiles.append(package + BOXIT_SIGNATURE_ENDING);
+                addFilesWithPath.append(localRepo->path + "/" + package);
+                addFilesWithPath.append(localRepo->path + "/" + package + BOXIT_SIGNATURE_ENDING);
+
+                // Find all packages with missing signatures if this is a normal file
+                if (!localRepo->signatures.contains(package + BOXIT_SIGNATURE_ENDING))
+                    missingSignatures.append(package);
+            }
+        }
+
+        if (missingSignatures.isEmpty())
+            continue;
+
+        cerr << QString::number(missingSignatures.size()).toUtf8().data();
+        cerr << ":: Package(s) without signature in repository " << localRepo->name.toUtf8().data() << " " << localRepo->architecture.toUtf8().data() << "!" << endl;
+
+        cerr << endl << "packages without signatures:" << endl << endl;
+
+        for (int i = 0; i < missingSignatures.size(); ++i) {
+            cerr << "   " << missingSignatures.at(i).toUtf8().data() << endl;
+        }
+
+        cerr << endl << "abording..." << endl;
+
+        return false;
+    }
+
+
+    // Inform the user
+    if (nothingToDo) {
+        cerr << ":: Nothing to do." << endl;
+        return false;
+    }
+
+    while (true) {
+        QString answer = getInput(":: Remove " + QString::number(infoRemovePackages.size()) + " remote package(s) and upload " + QString::number(infoAddPackages.size()) + " package(s) ? [Y/n/d] (d=details) ", false, false).toLower().trimmed();
+        if (answer == "d") {
+            if (!infoRemovePackages.isEmpty()) {
+                cout << endl << "remote packages to remove:" << endl << endl;
+
+                for (int i = 0; i < infoRemovePackages.size(); ++i) {
+                    cout << "   " << infoRemovePackages.at(i).toUtf8().data() << endl;
+                }
+            }
+
+            if (!infoAddPackages.isEmpty()) {
+                cout << endl << "packages to upload:" << endl << endl;
+
+                for (int i = 0; i < infoAddPackages.size(); ++i) {
+                    cout << "   " << infoAddPackages.at(i).toUtf8().data() << endl;
+                }
+            }
+
+            cout << endl;
+            continue;
+        }
+        else if (!answer.isEmpty() && answer != "y") {
+            cerr << "abording..." << endl;
+            return false;
+        }
+        else {
+            break;
+        }
+    }
+
+
+
+    // Check if connected...
+    if (!connectIfRequired(branch.serverURL))
+        return false; // Error messages are printed by the method
+
+
+    cout << ":: Pushing changes..." << endl;
+
+
+    // Get up-to-date branch struct
+    Branch remoteBranch = branch;
+    if (!fillBranchRepos(remoteBranch, true))
+        return false; // Error messages are printed by the method
+
+    // Check if current branch is up-to-date
+    for (int i = 0; i < remoteBranch.repos.size(); ++i) {
+        const Repo *remoteRepo = &remoteBranch.repos.at(i);
+        bool found = false;
+
+        for (int i = 0; i < branch.repos.size(); ++i) {
+            const Repo *repo = &branch.repos.at(i);
+            if (repo->name != remoteRepo->name || repo->architecture != remoteRepo->architecture)
+                continue;
+
+            if (repo->state != remoteRepo->state) {
+                cerr << "error: current branch is not up-to-date! Perform a pull operation first!" << endl;
+                return false;
+            }
+
+            found = true;
+            break;
+        }
+
+        if (!found) {
+            cerr << "error: current branch is not up-to-date! Perform a pull operation first!" << endl;
+            return false;
+        }
+    }
+
+
+
+
+    // Check if virtual packages exists on server
+    boxitSocket.sendData(MSG_POOL_CHECK_FILES_EXISTS, QByteArray(addVirtualPackages.join(BOXIT_SPLIT_CHAR).toAscii()));
+    boxitSocket.readData(msgID, data);
+
+    if (msgID != MSG_SUCCESS) {
+        cerr << "error: symlinked new packages don't exist on server!" << endl;
+        cerr << "missing packages: " << QString(data).replace(BOXIT_SPLIT_CHAR, " ").toUtf8().data() << endl;
+        return false;
+    }
+
+
+    // Lock repositories
+    for (int i = 0; i < localRepos.size(); ++i) {
+        LocalRepo *localRepo = &localRepos[i];
+
+        // Skip repo if there are no changes made
+        if (localRepo->addPackages.isEmpty() && localRepo->removePackages.isEmpty())
+            continue;
+
+        QStringList list;
+        list << branch.name << localRepo->name << localRepo->architecture;
+
+        boxitSocket.sendData(MSG_LOCK_REPO, QByteArray(list.join(BOXIT_SPLIT_CHAR).toAscii()));
+        boxitSocket.readData(msgID);
+
+        if (msgID != MSG_SUCCESS) {
+            cerr << "error: failed to lock repository " << localRepo->name.toUtf8().data() << " " << localRepo->architecture.toUtf8().data();
+            cerr << " on server! It might be locked by another user or a repository process is currently running..." << endl;
+            return false;
+        }
+    }
+
+
+    // Lock pool files
+    boxitSocket.sendData(MSG_LOCK_POOL_FILES, QByteArray(addFiles.join(BOXIT_SPLIT_CHAR).toAscii()));
+    boxitSocket.readData(msgID);
+
+    if (msgID != MSG_SUCCESS) {
+        cerr << "error: failed to lock pool files on server! The files might be locked by another user..." << endl;
+        return false;
+    }
+
+
+    // Upload files
+    for (int i = 0; i < addFilesWithPath.size(); ++i) {
+        if (!uploadData(addFilesWithPath.at(i), i + 1, addFilesWithPath.size()))
+            return false;
+    }
+
+    if (!addFiles.isEmpty()) {
+        cout << "\r                                                                               " << "\r" << flush;
+        cout << ":: Finished package upload." << endl;
+    }
+
+
+    // Move new files to pool
+    boxitSocket.sendData(MSG_MOVE_POOL_FILES);
+    boxitSocket.readData(msgID);
+
+    if (msgID != MSG_SUCCESS) {
+        cerr << "error: failed to move uploaded files to pool!" << endl;
+        return false;
+    }
+
+
+    // Release pool lock
+    boxitSocket.sendData(MSG_RELEASE_POOL_LOCK);
+    boxitSocket.readData(msgID);
+
+    if (msgID != MSG_SUCCESS) {
+        cerr << "error: failed to release pool lock!" << endl;
+        return false;
+    }
+
+
+    // Apply repository changes
+    for (int i = 0; i < localRepos.size(); ++i) {
+        LocalRepo *localRepo = &localRepos[i];
+
+        // Skip repo if there are no changes made
+        if (localRepo->addPackages.isEmpty() && localRepo->removePackages.isEmpty())
+            continue;
+
+        QString sendData = branch.name + BOXIT_SPLIT_CHAR + localRepo->name + BOXIT_SPLIT_CHAR + localRepo->architecture;
+        sendData += "\n" + localRepo->addPackages.join(BOXIT_SPLIT_CHAR);
+        sendData += "\n" + localRepo->removePackages.join(BOXIT_SPLIT_CHAR);
+
+        boxitSocket.sendData(MSG_APPLY_REPO_CHANGES, QByteArray(sendData.toAscii()));
+        boxitSocket.readData(msgID);
+
+        if (msgID != MSG_SUCCESS) {
+            cerr << "error: failed to apply changes to repository " << localRepo->name.toUtf8().data() << " " << localRepo->architecture.toUtf8().data() << "!" << endl;
+            return false;
+        }
+    }
+
+
+    // Release repo lock
+    boxitSocket.sendData(MSG_RELEASE_REPO_LOCK);
+    boxitSocket.readData(msgID);
+
+    if (msgID != MSG_SUCCESS) {
+        cerr << "error: failed to release repository lock!" << endl;
+        return false;
+    }
+
+    cout << ":: Finished push." << endl;
+
+    // Wait until process session finished
+    if (!listenOnStatus(true)) {
+        cout << endl << ":: Process session failed! Check the process errors..." << endl;
+        return false; // Error messages are printed by the method
+    }
+
+    cout << endl << ":: Process session successfully finished." << endl;
+    sleep(1);
+
+    // Pull changes
+    if (!pullBranch())
+        return false; // Error messages are printed by the method
+
+    return true;
+}
+
+
+
+bool checkValidArchitecture(QList<LocalRepo> & repos) {
+    const QStringList skipArchs = QString(BOXIT_SKIP_ARCHITECTURE_CHECKS).split(" ", QString::SkipEmptyParts);
+
+    for (int i = 0; i < repos.size(); ++i) {
+        LocalRepo *repo = &repos[i];
+        QStringList invalidFiles;
+
+        foreach (const QString package, repo->packages) {
+            QString arch = getArchofPKG(package);
+
+            if (!skipArchs.contains(arch) && arch != repo->architecture)
+                invalidFiles.append(package);
+        }
+
+        if (invalidFiles.isEmpty())
+            continue;
+
+        // Inform the user about invalid packages
+        while (true) {
+            QString answer = getInput(QString(":: %1 package(s) with invalid architecture found in repository %2 %3!\n   Remove them? [Y/n/d] (d=details) ").arg(QString::number(invalidFiles.size()), repo->name, repo->architecture), false, false).toLower().trimmed();
+            if (answer == "d") {
+                cout << endl << "packages to remove:" << endl << endl;
+
+                for (int i = 0; i < invalidFiles.size(); ++i) {
+                    cout << "   " << invalidFiles.at(i).toUtf8().data() << endl;
+                }
+
+                cout << endl;
+                continue;
+            }
+            else if (!answer.isEmpty() && answer != "y") {
+                cerr << "abording..." << endl;
+                return false;
+            }
+            else {
+                // Remove invalid packages
+                foreach (const QString file, invalidFiles) {
+                    if (!QFile::remove(repo->path + "/" + file)) {
+                        cerr << "error: failed to remove file '" << file.toUtf8().data() << "'!" << endl;
+                        return false;
+                    }
+
+                    // Also remove package out of packages list
+                    repo->packages.removeAll(file);
+                }
+
+                break;
+            }
+        }
+    }
+
+    return true;
+}
+
+
+
+bool checkDuplicatePackages(QList<LocalRepo> & repos) {
+    for (int i = 0; i < repos.size(); ++i) {
+        LocalRepo *repo = &repos[i];
+        QStringList duplicatePackages;
+
+        // Find all duplicate Packages
+        foreach (const QString package, repo->packages) {
+            QString packageName = getNameofPKG(package);
+
+            // Check for double packages
+            QStringList foundPackages, packages = repo->packages.filter(packageName);
+
+            for (int i = 0; i < packages.size(); ++i) {
+                if (getNameofPKG(packages.at(i)) == packageName)
+                    foundPackages.append(packages.at(i));
+            }
+
+            if (foundPackages.size() > 1)
+                duplicatePackages.append(foundPackages);
+        }
+
+        // Remove duplicates and sort
+        duplicatePackages.removeDuplicates();
+        duplicatePackages.sort();
+
+        if (duplicatePackages.isEmpty())
+            continue;
+
+
+        // Fill list of duplicate packages to remove
+        QStringList removeDuplicatePackages = duplicatePackages;
+
+        for (int i = 0; i < duplicatePackages.size(); ++i) {
+            QString filename = duplicatePackages.at(i);
+            QString name = getNameofPKG(filename);
+            Version version = getVersionofPKG(filename);
+
+            for (int x = 0; x < duplicatePackages.size(); ++x) {
+                QString filenameCompare = duplicatePackages.at(x);
+                Version versionCompare = getVersionofPKG(filenameCompare);
+
+                if (x == i || name != getNameofPKG(filenameCompare) || version > versionCompare)
+                    continue;
+
+                filename = filenameCompare;
+                version = versionCompare;
+            }
+
+            removeDuplicatePackages.removeAll(filename);
+        }
+
+        removeDuplicatePackages.removeDuplicates();
+        removeDuplicatePackages.sort();
+
+
+        // Inform the user if double packages were found
+        while (true) {
+            QString answer = getInput(QString(":: %1 packages with multiple versions were found in repository %2 %3!\n   Remove %4 old version(s)? [Y/n/d] (d=details) ").arg(QString::number(duplicatePackages.size()), repo->name, repo->architecture, QString::number(removeDuplicatePackages.size())), false, false).toLower().trimmed();
+            if (answer == "d") {
+                cout << endl << "duplicate packages:" << endl << endl;
+
+                for (int i = 0; i < duplicatePackages.size(); ++i) {
+                    cout << "   " << duplicatePackages.at(i).toUtf8().data() << endl;
+                }
+
+                cout << endl << "packages to remove:" << endl << endl;
+
+                for (int i = 0; i < removeDuplicatePackages.size(); ++i) {
+                    cout << "   " << removeDuplicatePackages.at(i).toUtf8().data() << endl;
+                }
+
+                cout << endl;
+                continue;
+            }
+            else if (!answer.isEmpty() && answer != "y") {
+                cerr << "abording..." << endl;
+                return false;
+            }
+            else {
+                // Remove old packages
+                foreach (const QString file, removeDuplicatePackages) {
+                    if (!QFile::remove(repo->path + "/" + file)) {
+                        cerr << "error: failed to remove file '" << file.toUtf8().data() << "'!" << endl;
+                        return false;
+                    }
+
+                    // Also remove package out of packages list
+                    repo->packages.removeAll(file);
+                }
+
+                break;
+            }
+        }
+    }
+
+    return true;
+}
+
+
+
+bool checkSignatures(QList<LocalRepo> & repos) {
+    const int signatureEndingLength = QString(BOXIT_SIGNATURE_ENDING).length();
+
+    for (int i = 0; i < repos.size(); ++i) {
+        LocalRepo *repo = &repos[i];
+        QStringList corruptSignatures;
+
+        // Find all signatures without package
+        foreach (const QString signature, repo->signatures) {
+            if (!repo->packages.contains(QString(signature).remove(signature.length() - signatureEndingLength, signatureEndingLength)))
+                corruptSignatures.append(signature);
+        }
+
+        if (corruptSignatures.isEmpty())
+            continue;
+
+        while (true) {
+            QString answer = getInput(QString(":: %1 signature file(s) without package in repository %2 %3!\n   Remove? [Y/n/d] (d=details) ").arg(QString::number(corruptSignatures.size()), repo->name, repo->architecture), false, false).toLower().trimmed();
+
+            if (answer == "d") {
+                cout << endl << "signatures without package:" << endl << endl;
+
+                for (int i = 0; i < corruptSignatures.size(); ++i) {
+                    cout << "   " << corruptSignatures.at(i).toUtf8().data() << endl;
+                }
+
+                cout << endl;
+                continue;
+            }
+            else if (!answer.isEmpty() && answer != "y") {
+                cerr << "abording..." << endl;
+                return false;
+            }
+            else {
+                // Remove corrupt signatures
+                foreach (const QString file, corruptSignatures) {
+                    if (!QFile::remove(repo->path + "/" + file)) {
+                        cerr << "error: failed to remove file '" << file.toUtf8().data() << "'!" << endl;
+                        return false;
+                    }
+
+                    // Also remove signature out of signatue list
+                    repo->signatures.removeAll(file);
+                }
+
+                break;
+            }
+        }
+    }
+
+    return true;
+}
+
+
+
+bool checkMatchRepositories(QList<LocalRepo> & repos) {
+    QMap<QString, QList<LocalRepo*> > repoMap;
+
+    // Fill the repo map
+    for (int i = 0; i < repos.size(); ++i) {
+        LocalRepo *repo = &repos[i];
+
+        repoMap[repo->name].append(repo);
+    }
+
+    // Check for different packages in the same repositories...
+    QMapIterator<QString, QList<LocalRepo*> > it(repoMap);
+    while (it.hasNext()) {
+        it.next();
+
+        QStringList differentPackages;
+
+        for (int i = 0; i < it.value().size(); ++i) {
+            const LocalRepo *repo = it.value().at(i);
+
+            for (int x = 0; x < it.value().size(); ++x) {
+                if (i == x)
+                    continue;
+
+                const LocalRepo *checkRepo = it.value().at(x);
+
+                foreach(const QString package, repo->packages) {
+                    const QString name = getNameofPKG(package);
+                    const QString version = getVersionofPKG(package);
+                    bool found = false;
+
+                    foreach(const QString checkPackage, checkRepo->packages) {
+                        if (name == getNameofPKG(checkPackage) && version == getVersionofPKG(checkPackage)) {
+                            found = true;
+                            break;
+                        }
+                    }
+
+                    if (!found)
+                        differentPackages.append(package);
+                }
+            }
+        }
+
+        differentPackages.removeDuplicates();
+        differentPackages.sort();
+
+        if (differentPackages.isEmpty())
+            continue;
+
+        // Add repositories to missing packages...
+        for (int i = 0; i < differentPackages.size(); ++i) {
+            QString *package = &differentPackages[i];
+
+            for (int x = 0; x < it.value().size(); ++x) {
+                const LocalRepo *repo = it.value().at(x);
+
+                if (repo->packages.contains(*package)) {
+                    *package += "  (" + repo->name + " " + repo->architecture + ")";
+                    break;
+                }
+            }
+        }
+
+        while (true) {
+            QString answer = getInput(QString(":: Subrepositories of base repository '%1' contain %2 different package(s)!\n   Ignore and Continue? [Y/n/d] (d=details) ").arg(it.key(), QString::number(differentPackages.size())), false, false).toLower().trimmed();
+
+            if (answer == "d") {
+                cout << endl << "different packages:" << endl << endl;
+
+                for (int i = 0; i < differentPackages.size(); ++i) {
+                    cout << "   " << differentPackages.at(i).toUtf8().data() << endl;
+                }
+
+                cout << endl;
+                continue;
+            }
+            else if (!answer.isEmpty() && answer != "y") {
+                cerr << "abording..." << endl;
+                return false;
+            }
+            else {
+                break;
+            }
+        }
+    }
+
+    return true;
+}
+
+
+
+bool checkOverwriteSyncPackages(QList<LocalRepo> & repos) {
+    for (int i = 0; i < repos.size(); ++i) {
+        LocalRepo *repo = &repos[i];
+        QStringList overwrittenPackages, newerSyncPackages;
+
+        foreach (const QString package, repo->packages) {
+            const QString name = getNameofPKG(package);
+            const Version version = getVersionofPKG(package);
+
+            // Check if same package exists in sync packages
+            foreach (const QString syncPackage, repo->parentRepo->syncPackages) {
+                if (name == getNameofPKG(syncPackage)) {
+                    overwrittenPackages.append(syncPackage + "  ->  " + package);
+
+                    // Check if sync package is newer than the local package
+                    if (version < Version(getVersionofPKG(syncPackage)))
+                        newerSyncPackages.append(syncPackage + "  ->  " + package);
+
+                    break;
+                }
+            }
+        }
+
+        newerSyncPackages.removeDuplicates();
+        overwrittenPackages.removeDuplicates();
+        newerSyncPackages.sort();
+        overwrittenPackages.sort();
+
+        if (overwrittenPackages.isEmpty())
+            continue;
+
+        while (true) {
+            QString answer = getInput(QString(":: %1 package(s) overwrite sync packages in repository %2 %3!\n   Continue? [Y/n/d] (d=details) ").arg(QString::number(overwrittenPackages.size()), repo->name, repo->architecture), false, false).toLower().trimmed();
+
+            if (answer == "d") {
+                cout << endl << "overwritten packages:" << endl;
+                cout << endl << "   [OVERWRITTEN SYNC PACKAGE]  ->  [LOCAL PACKAGE]" << endl << endl;
+
+                for (int i = 0; i < overwrittenPackages.size(); ++i) {
+                    cout << "   " << overwrittenPackages.at(i).toUtf8().data() << endl;
+                }
+
+                cout << endl;
+                continue;
+            }
+            else if (!answer.isEmpty() && answer != "y") {
+                cerr << "abording..." << endl;
+                return false;
+            }
+            else {
+                break;
+            }
+        }
+
+        if (newerSyncPackages.isEmpty())
+            continue;
+
+        while (true) {
+            QString answer = getInput(QString(":: %1 overwritten sync package(s) are newer than local package(s) in repository %2 %3!\n   Continue? [Y/n/d] (d=details) ").arg(QString::number(newerSyncPackages.size()), repo->name, repo->architecture), false, false).toLower().trimmed();
+
+            if (answer == "d") {
+                cout << endl << "newer overwritten sync packages:" << endl;
+                cout << endl << "   [OVERWRITTEN SYNC PACKAGE]  ->  [LOCAL PACKAGE]" << endl << endl;
+
+                for (int i = 0; i < newerSyncPackages.size(); ++i) {
+                    cout << "   " << newerSyncPackages.at(i).toUtf8().data() << endl;
+                }
+
+                cout << endl;
+                continue;
+            }
+            else if (!answer.isEmpty() && answer != "y") {
+                cerr << "abording..." << endl;
+                return false;
+            }
+            else {
+                break;
+            }
+        }
+    }
+
+    return true;
+}
+
+
+
+bool uploadData(const QString path, const int currentIndex, const int maxIndex) {
+    if (!QFile::exists(path)) {
+        cout << "\r                                                                               " << "\r" << flush;
+        cerr << "error: file not found '" << path.toUtf8().data() << "'" << endl;
+        return false;
+    }
+
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        cout << "\r                                                                               " << "\r" << flush;
+        cerr << "error: failed to open file '" << path.toUtf8().data() << "'" << endl;
+        return false;
+    }
+
+    QString uploadFileName = path.split("/", QString::SkipEmptyParts).last();
+    QString coutFileName = uploadFileName;
+
+    if (coutFileName.size() > 40)
+        coutFileName = coutFileName.remove(40, coutFileName.size()) + "...";
+
+
+    // Tell the server the file checksum
+    boxitSocket.sendData(MSG_FILE_CHECKSUM, sha1CheckSum(file.fileName()));
+    boxitSocket.readData(msgID);
+
+    if (msgID != MSG_SUCCESS) {
+        cout << "\r                                                                               " << "\r" << flush;
+        cerr << "\nerror: server failed to obtain file checksum!" << endl;
+        return false;
+    }
+
+
+    boxitSocket.sendData(MSG_FILE_UPLOAD, QByteArray(uploadFileName.toAscii()));
+    boxitSocket.readData(msgID);
+
+    if (msgID == MSG_FILE_ALREADY_EXISTS) {
+        cout << "\r                                                                               " << "\r" << flush;
+        cout << QString(":: [%1/%2] '%3' already exists [100%]").arg(QString::number(currentIndex), QString::number(maxIndex), coutFileName).toUtf8().data() << flush;
+        return true;
+    }
+    else if (msgID == MSG_FILE_ALREADY_EXISTS_WRONG_CHECKSUM) {
+        cout << "\r                                                                               " << "\r" << flush;
+        cerr << "error: a different '" << uploadFileName.toUtf8().data() << "' file already exists on server! (Different checksums)" << endl;
+        return false;
+    }
+    else if (msgID != MSG_SUCCESS) {
+        cout << "\r                                                                               " << "\r" << flush;
+        cerr << "error: server failed to obtain file '" << path.toUtf8().data() << "'" << endl;
+        return false;
+    }
+
+    int dataSizeWritten = 0;
+    int progress;
+
+    while(!file.atEnd()) {
+        data = file.read(BOXIT_SOCKET_MAX_SIZE);
+        boxitSocket.sendData(MSG_DATA_UPLOAD, data);
+        dataSizeWritten += data.size();
+
+        // Calculate progress
+        progress = file.size() / 100;
+        if (progress <= 0)
+            progress = 1;
+
+        progress = dataSizeWritten / progress;
+
+        // Output status
+        cout << "\r                                                                               " << "\r" << flush;
+        cout << QString(":: [%1/%2] uploading '%3' [%4%]").arg(QString::number(currentIndex), QString::number(maxIndex), coutFileName, QString::number(progress)).toUtf8().data() << flush;
+    }
+    file.close();
+
+    // Tell the server that we finished...
+    boxitSocket.sendData(MSG_DATA_UPLOAD_FINISH);
+    boxitSocket.readData(msgID);
+
+    if (msgID == MSG_ERROR_WRONG_CHECKSUM) {
+        cout << "\r                                                                               " << "\r" << flush;
+        cerr << "\nerror: uploaded file is corrupted '" << path.toUtf8().data() << "'" << endl;
+        return false;
+    }
+    else if (msgID != MSG_SUCCESS) {
+        cout << "\r                                                                               " << "\r" << flush;
+        cerr << "\nerror: server failed to obtain file '" << path.toUtf8().data() << "'" << endl;
+        return false;
+    }
+
+    cout << "\r                                                                               " << "\r" << flush;
+    cout << QString(":: [%1/%2] finished '%3' [100%]").arg(QString::number(currentIndex), QString::number(maxIndex), coutFileName).toUtf8().data() << flush;
+
+    return true;
+}
+
+
+
+bool listenOnStatus(bool exitOnSessionEnd) {
+    TimeOutReset timeOutReset(&boxitSocket);
+    QString host = "";
+
+    if (!connectIfRequired(host))
+        return false; // Error messages are printed by the method
+
+    boxitSocket.sendData(MSG_LISTEN_ON_STATUS);
+    boxitSocket.readData(msgID);
+
+    if (msgID != MSG_SUCCESS) {
+        cerr << "error: failed to listen on status!" << endl;
+        return false;
+    }
+
+    // Start our reset timeout timer
+    timeOutReset.start();
+
+    bool firstBranch = true;
+    bool firstRepo = true;
+    bool noState = true;
+    bool returnValue = true;
+
+    boxitSocket.readData(msgID, data);
+
+    while (msgID == MSG_DATA_END_STATUS_LIST || msgID == MSG_DATA_NEW_STATUS_LIST || msgID == MSG_DATA_BRANCH_STATUS || msgID == MSG_DATA_REPO_STATUS || msgID == MSG_STATUS_SESSION_FAILED || msgID == MSG_STATUS_SESSION_FINISHED) {
+        if (msgID == MSG_DATA_NEW_STATUS_LIST) {
+            // Clear console
+            write(1,"\E[H\E[2J",7);
+
+            // Reset values
+            firstBranch = firstRepo = noState = true;
+
+            // Output info
+            cout << ":: Status" << endl;
+        }
+        else if (msgID == MSG_DATA_BRANCH_STATUS) {
+            noState = false;
+
+            if (firstBranch) {
+                cout << endl;
+                consoleFill('-', 79);
+                cout << setw(34) << "BRANCH" << setw(44) << "JOB" << endl;
+                consoleFill('-', 79);
+                firstBranch = false;
+            }
+
+            QStringList list = QString(data).split(BOXIT_SPLIT_CHAR, QString::KeepEmptyParts);
+            if (list.size() < 4) {
+                cerr << "error: invalid server reply!" << endl;
+                return false;
+            }
+
+            cout << setw(34) << list.at(0).toUtf8().data() << setw(44) << list.at(1).toUtf8().data() << endl;
+        }
+        else if (msgID == MSG_DATA_REPO_STATUS) {
+            noState = false;
+
+            if (firstRepo) {
+                cout << endl;
+                consoleFill('-', 79);
+                cout << setw(17) << "BRANCH" << setw(17) << "REPO" << setw(11) << "ARCH" << setw(33) << "JOB" << endl;
+                consoleFill('-', 79);
+                firstRepo = false;
+            }
+
+            QStringList list = QString(data).split(BOXIT_SPLIT_CHAR, QString::KeepEmptyParts);
+            if (list.size() < 6) {
+                cerr << "error: invalid server reply!" << endl;
+                return false;
+            }
+
+            cout << setw(17) << list.at(0).toUtf8().data();
+            cout << setw(17) << list.at(1).toUtf8().data();
+            cout << setw(11) << list.at(2).toUtf8().data();
+            cout << setw(33) << list.at(3).toUtf8().data() << endl;
+        }
+        else if (msgID == MSG_DATA_END_STATUS_LIST) {
+            if (noState)
+                cout << ":: No new repository or branch states." << endl;
+        }
+        else if (exitOnSessionEnd && msgID == MSG_STATUS_SESSION_FINISHED) {
+            // Stop listining the status signals
+            boxitSocket.sendData(MSG_STOP_LISTEN_ON_STATUS);
+
+            // Set return value
+            returnValue = true;
+        }
+        else if (exitOnSessionEnd && msgID == MSG_STATUS_SESSION_FAILED) {
+            // Stop listining the status signals
+            boxitSocket.sendData(MSG_STOP_LISTEN_ON_STATUS);
+
+            // Set return value
+            returnValue = false;
+        }
+
+        boxitSocket.readData(msgID, data);
+    }
+
+    if (msgID != MSG_SUCCESS) {
+        cerr << "error: failed to listen on status!" << endl;
+        return false;
+    }
+
+    return returnValue;
+}
+
+
+
+bool printErrors() {
+    QString host = "";
+    if (!connectIfRequired(host))
+        return false; // Error messages are printed by the method
+
+    boxitSocket.sendData(MSG_LISTEN_ON_STATUS);
+    boxitSocket.readData(msgID);
+
+    if (msgID != MSG_SUCCESS) {
+        cerr << "error: failed to listen on status!" << endl;
+        return false;
+    }
+
+    bool noErrors = true;
+
+    boxitSocket.readData(msgID, data);
+
+    while (msgID == MSG_DATA_NEW_STATUS_LIST || msgID == MSG_DATA_BRANCH_STATUS || msgID == MSG_DATA_REPO_STATUS || msgID == MSG_STATUS_SESSION_FAILED || msgID == MSG_STATUS_SESSION_FINISHED) {
+        if (msgID == MSG_DATA_NEW_STATUS_LIST) {
+            // Clear console
+            write(1,"\E[H\E[2J",7);
+
+            // Output info
+            cout << ":: Obtaining branch and repository errors..." << endl;
+        }
+        else if (msgID == MSG_DATA_BRANCH_STATUS) {
+            QStringList list = QString(data).split(BOXIT_SPLIT_CHAR, QString::KeepEmptyParts);
+            if (list.size() < 4) {
+                cerr << "error: invalid server reply!" << endl;
+                return false;
+            }
+
+            // Print error if required
+            if ((bool)list.at(2).toInt()) {
+                noErrors = false;
+
+                cout << endl;
+                consoleFill('-', 79);
+                cout << "Errors of branch " << list.at(0).toUtf8().data() << endl;
+                consoleFill('-', 79);
+                cout << list.at(3).toUtf8().data() << endl << endl;
+            }
+        }
+        else if (msgID == MSG_DATA_REPO_STATUS) {
+            QStringList list = QString(data).split(BOXIT_SPLIT_CHAR, QString::KeepEmptyParts);
+            if (list.size() < 6) {
+                cerr << "error: invalid server reply!" << endl;
+                return false;
+            }
+
+            // Print error if required
+            if ((bool)list.at(4).toInt()) {
+                noErrors = false;
+
+                cout << endl;
+                consoleFill('-', 79);
+                cout << "Errors of repository " << list.at(0).toUtf8().data() << " " << list.at(1).toUtf8().data() << " " << list.at(2).toUtf8().data() << endl;
+                consoleFill('-', 79);
+                cout << list.at(5).toUtf8().data() << endl << endl;
+            }
+        }
+
+        boxitSocket.readData(msgID, data);
+    }
+
+    if (msgID != MSG_SUCCESS && msgID != MSG_DATA_END_STATUS_LIST) {
+        cerr << "error: failed to listen on status!" << endl;
+        return false;
+    }
+
+    if (noErrors)
+        cout << ":: No new errors." << endl;
+
+    return true;
+}
+
+
+
+bool syncBranch() {
+    QString host = "";
+    if (!connectIfRequired(host))
+        return false; // Error messages are printed by the method
+
+    // List all available branches
+    QStringList branches;
+
+    if (!getAllRemoteBranches(branches))
+        return false; // Error messages are printed by the method
+
+    cout << ":: Available branches:" << endl << endl;
+    for (int i = 0; i < branches.size(); ++i) {
+        cout << " " << QString::number(i + 1).toUtf8().data() << ") " << branches.at(i).toUtf8().data() << endl;
+    }
+    cout << endl;
+
+
+    // Get user input
+    int index;
+
+    while (true) {
+        index = getInput(":: Branch index: ", false, false).trimmed().toInt();
+
+        if (index <= 0 || index > branches.size()) {
+            cerr << "error: index is invalid!" << endl;
+            continue;
+        }
+
+        break;
+    }
+    --index;
+
+    const QString branchName = branches.at(index);
+
+
+    // Ask user to change the current sync url
+    if (!changeSyncUrlOnRequest(branchName))
+        return false; // Error messages are printed by the method
+
+
+    // Ask user to change exclude list
+    QString answer = getInput(":: Adjust exclude list? [y/N] ", false, false).toLower().trimmed();
+    if (answer == "y" && !changeSyncExcludeFiles(branchName))
+        return false;
+
+
+    // Send sync request
+    cout << ":: Synchronizing branch '" << branchName.toUtf8().data() << "'" << endl;
+
+    boxitSocket.sendData(MSG_SYNC_BRANCH, QByteArray(branchName.toAscii()));
+    boxitSocket.readData(msgID);
+
+    if (msgID != MSG_SUCCESS) {
+        cerr << "error: failed to start synchronization process! The branch might not exists or another synchronization process is running..." << endl;
+        return false;
+    }
+
+    if (!listenOnStatus(true)) {
+        cout << endl << ":: Synchronization failed! Check the process errors..." << endl;
+        return false; // Error messages are printed by the method
+    }
+
+    cout << endl << ":: Synchronization successfully finished." << endl;
+
+    return true;
+}
+
+
+
+bool changeSyncUrlOnRequest(const QString branchName) {
+    // Get current sync url of branch
+    boxitSocket.sendData(MSG_GET_BRANCH_URL, QByteArray(branchName.toAscii()));
+    boxitSocket.readData(msgID, data);
+
+    if (msgID != MSG_SUCCESS) {
+        cerr << "error: failed to obtain branch sync url!" << endl;
+        return false;
+    }
+
+    // Ask user to change url
+    QString answer = getInput(QString(":: Current synchronization url: '%1'\n   Change it? [y/N] ").arg(QString(data)), false, false).toLower().trimmed();
+    if (answer != "y")
+        return true;
+
+    // Get new url
+    QString input;
+
+    cout << " hint: possible variables: $branch, $repo and $arch" << endl;
+
+    while (true) {
+        input = getInput(" new synchronization url: ", false, false).trimmed();
+
+        // Check if valid
+        if (input.isEmpty() || (!input.contains("http://") && !input.contains("ftp://"))) {
+            cerr << "error: url is invalid. It must contain the 'http://' or 'ftp://' prefix." << endl;
+            continue;
+        }
+
+        break;
+    }
+
+    // Set new url
+    boxitSocket.sendData(MSG_SET_BRANCH_URL, QByteArray(QString(branchName + BOXIT_SPLIT_CHAR + input).toAscii()));
+    boxitSocket.readData(msgID);
+
+    if (msgID != MSG_SUCCESS) {
+        cerr << "error: failed to set new branch sync url!" << endl;
+        return false;
+    }
+
+    return true;
+}
+
+
+
+bool changeSyncExcludeFiles(const QString branchName) {
+    boxitSocket.sendData(MSG_GET_BRANCH_SYNC_EXCLUDE_FILES, QByteArray(QString(branchName).toAscii()));
+    boxitSocket.readData(msgID, data);
+
+    if (msgID != MSG_SUCCESS) {
+        cerr << "error: failed to get exclude content!" << endl;
+        return false;
+    }
+
+    // Write content to temporary file to edit it
+    QFile file(QString(BOXIT_TMP_PATH) + "/.boxit-" + QString::number(qrand()));
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        cerr << "error: failed to create file '" << file.fileName().toAscii().data() << "'!" << endl;
+        return false;
+    }
+
+    QTextStream out(&file);
+    out << QString(data);
+    file.close();
+
+    // Show hint
+    cout << " hint: wildcards (?, *, [...]) and comments (#) are allowed." << endl;
+
+    // Get editor to use
+    QString editor = getInput(" editor: ", false, false).trimmed();
+
+
+    // Set our interrupt signal
+    signal(SIGINT, interruptEditorProcess);
+
+    // Show hint
+    cout << " hint: kill editor with CTRL+C." << endl;
+
+    editorProcess->start(editor, QStringList() << file.fileName());
+    editorProcess->waitForStarted();
+
+    while(editorProcess->state() == QProcess::Running) {
+        // Reset our server timeout to keep our session alive!
+        resetServerTimeout();
+
+        // wait...
+        editorProcess->waitForFinished(5000);
+    }
+
+    // Reset our interrupt signal
+    signal(SIGINT, SIG_DFL);
+
+    // Warn user on possible process failure
+    if (editorProcess->exitCode() != 0)
+        cerr << "warning: process might have failed!" << endl;
+
+    // Get file content
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)){
+        cerr << "error: failed to read file content!" << endl;
+        return false;
+    }
+
+    QTextStream in(&file);
+    QString content = in.readAll();
+    file.close();
+
+    // Remove file again
+    file.remove();
+
+    // Just wait, so we don't get false keyboard inputs
+    usleep(100000);
+
+    // Ask user to upload new exclude list
+    QString answer = getInput(" upload new exclude list? [Y/n] ", false, false).toLower().trimmed();
+    if (!answer.isEmpty() && answer != "y") {
+        cerr << "abording..." << endl;
+        return false;
+    }
+
+    // Upload new exclude list
+    boxitSocket.sendData(MSG_SET_BRANCH_SYNC_EXCLUDE_FILES, QByteArray(QString(branchName + BOXIT_SPLIT_CHAR + content).toAscii()));
+    boxitSocket.readData(msgID);
+
+    if (msgID != MSG_SUCCESS) {
+        cerr << "error: failed to set new exclude content!" << endl;
+        return false;
+    }
+
+    return true;
 }

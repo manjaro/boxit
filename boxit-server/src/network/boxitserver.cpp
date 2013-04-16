@@ -1,5 +1,6 @@
 /*
- *  Fuchs - Manjaro Repository Management
+ *  BoxIt - Manjaro Linux Repository Management Software
+ *  Roland Singer <roland@manjaro.org>
  *
  *  Copyright (C) 2007 Free Software Foundation, Inc.
  *
@@ -39,7 +40,7 @@ bool BoxitServer::start() {
 
 void BoxitServer::incomingConnection(int socketDescriptor)
 {
-    BoxitThread *thread = new BoxitThread(socketDescriptor, this);
+    BoxitThread *thread = new BoxitThread(socketDescriptor, Global::getNewUniqueSessionID(), this);
     connect(thread, SIGNAL(finished()), thread, SLOT(deleteLater()));
     connect(thread, SIGNAL(terminated()), thread, SLOT(deleteLater()));
     thread->start();

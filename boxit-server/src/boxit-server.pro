@@ -22,15 +22,16 @@ SOURCES += main.cpp \
     boxitinstance.cpp \
     user/userdbs.cpp \
     user/user.cpp \
-    repo/repodb.cpp \
     global.cpp \
     sync/sync.cpp \
     sync/download.cpp \
     sync/sha256/sha256.c \
     sync/sha256/cryptsha256.cpp \
-    repo/pool.cpp \
-    repo/repo.cpp \
-    maintimer.cpp
+    maintimer.cpp \
+    db/database.cpp \
+    db/branch.cpp \
+    db/repo.cpp \
+    db/status.cpp
 
 HEADERS += \
     network/boxitthread.h \
@@ -40,15 +41,16 @@ HEADERS += \
     boxitinstance.h \
     user/userdbs.h \
     user/user.h \
-    repo/repodb.h \
     global.h \
     sync/sync.h \
     sync/download.h \
     sync/sha256/sha256.h \
     sync/sha256/cryptsha256.h \
-    repo/pool.h \
-    repo/repo.h \
-    maintimer.h
+    maintimer.h \
+    db/database.h \
+    db/branch.h \
+    db/repo.h \
+    db/status.h
 
 
 target.path = /usr/bin

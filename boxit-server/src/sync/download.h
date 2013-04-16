@@ -42,9 +42,9 @@ public:
 
     bool download(const QString url, bool keepAttempts = false);
     bool isActive();
-    void cancle();
+    void cancel();
     QString lastError();
-    bool isError();
+    bool hasError();
 
 signals:
     void finished(bool success);
