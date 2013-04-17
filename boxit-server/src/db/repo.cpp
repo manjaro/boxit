@@ -21,7 +21,7 @@
 #include "repo.h"
 
 Repo::Repo(const QString branchName, const QString name, const QString architecture, const QString path) :
-    QThread(QCoreApplication::instance()),
+    QThread(),
     branchName(branchName),
     name(name),
     architecture(architecture),
@@ -30,6 +30,9 @@ Repo::Repo(const QString branchName, const QString name, const QString architect
     repoDB(name + QString(BOXIT_DB_ENDING)),
     repoDBLink(name + QString(BOXIT_DB_LINK_ENDING))
 {
+    moveToThread(qApp->thread());
+    setParent(qApp);
+
     isCommitting = false;
     isSyncRepo = false;
     waitingCommit = false;
@@ -148,6 +151,7 @@ void Repo::start() {
     waitingCommit = false;
     threadErrorString.clear();
     threadSessionID = lockedSessionID;
+    threadUsername = lockedUsername;
     QThread::start();
 }
 
@@ -175,6 +179,7 @@ void Repo::abort() {
     mutexWaitCondition.unlock();
     waitingCommit = false;
     threadSessionID = -1;
+    threadUsername.clear();
 
     // Status update
     Status::setRepoStateChanged(branchName, name, architecture, "process canceled", "Process canceled due to a process failure of another repository process with the same session ID.", Status::STATE_FAILED);
@@ -196,6 +201,7 @@ void Repo::run() {
     sleep(2);
 
     QList<Package> packages;
+    QStringList addPackages, removePackages;
 
     // Add overlay packages
     foreach (const QString package, tmpOverlayPackages) {
@@ -230,6 +236,34 @@ void Repo::run() {
         if (!found)
             packages.append(pkg);
     }
+
+
+    // Get a list of all added and removed packages
+    {
+        QStringList allPackages = syncPackages;
+        allPackages.append(overlayPackages);
+
+        QStringList allTmpPackages = tmpSyncPackages;
+        allTmpPackages.append(tmpOverlayPackages);
+
+        // Added packages
+        foreach (const QString package, allTmpPackages) {
+            if (!allPackages.contains(package))
+                addPackages.append(package);
+        }
+
+        // Removed packages
+        foreach (const QString package, allPackages) {
+            if (!allTmpPackages.contains(package))
+                removePackages.append(package);
+        }
+
+        addPackages.removeDuplicates();
+        removePackages.removeDuplicates();
+        addPackages.sort();
+        removePackages.sort();
+    }
+
 
 
     // Create symlinks
@@ -329,10 +363,14 @@ void Repo::run() {
     // Status update
     Status::setRepoStateChanged(branchName, name, architecture, "finished package commit", "", Status::STATE_SUCCESS);
 
+    // Send e-mail
+    Status::setRepoCommit(threadUsername, branchName, name, architecture, addPackages, removePackages);
+
     emit threadFinished(this, threadSessionID);
     mutexWaitCondition.unlock();
     isCommitting = false;
     threadSessionID = -1;
+    threadUsername.clear();
     return;
 
 error:
@@ -344,6 +382,7 @@ error:
     isCommitting = false;
     emit threadFailed(this, threadSessionID);
     threadSessionID = -1;
+    threadUsername.clear();
 }
 
 

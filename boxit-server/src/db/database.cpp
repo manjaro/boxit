@@ -76,6 +76,8 @@ QStringList Database::getBranches() {
         list.append(branches.at(i)->name);
     }
 
+    list.sort();
+
     return list;
 }
 
@@ -133,6 +135,24 @@ bool Database::setBranchSyncExcludeFiles(const QString branchName, const QString
         return false;
 
     return branch->setExcludeFilesContent(excludeFilesContent);
+}
+
+
+
+bool Database::isBranchLocked(const QString branchName) {
+    QMutexLocker locker(&mutex);
+
+    // Get branch
+    Branch *branch = _getBranch(branchName);
+    if (branch == NULL)
+        return false;
+
+    for (int i = 0; i < branch->repos.size(); ++i) {
+        if (branch->repos[i]->isLocked())
+            return true;
+    }
+
+    return false;
 }
 
 
@@ -339,6 +359,105 @@ bool Database::synchronizeBranch(const QString branchName, const QString usernam
     syncSessionID = sync.start(username, branch);
 
     return (syncSessionID >= 0);
+}
+
+
+
+bool Database::snapshotBranch(const QString sourceBranchName, const QString destBranchName, const QString username, const int sessionID) {
+    QMutexLocker locker(&mutex);
+
+    bool returnCode = false;
+
+    if (sourceBranchName == destBranchName)
+        return false;
+
+    // Get branches
+    Branch *sourceBranch = _getBranch(sourceBranchName);
+    Branch *destBranch = _getBranch(destBranchName);
+    if (sourceBranch == NULL || destBranch == NULL)
+        return false;
+
+
+    // Check if any repository of source or destination branch is locked
+    for (int i = 0; i < sourceBranch->repos.size(); ++i) {
+        if (sourceBranch->repos[i]->isLocked())
+            return false;
+    }
+
+    for (int i = 0; i < destBranch->repos.size(); ++i) {
+        if (destBranch->repos[i]->isLocked())
+            return false;
+    }
+
+
+    // Try to lock branches
+    for (int i = 0; i < sourceBranch->repos.size(); ++i) {
+        if (!sourceBranch->repos[i]->lock(sessionID, username))
+            goto unlockRepos;
+    }
+
+    for (int i = 0; i < destBranch->repos.size(); ++i) {
+        if (!destBranch->repos[i]->lock(sessionID, username))
+            goto unlockRepos;
+    }
+
+
+    // Remove destination branch
+    if (!Global::rmDir(destBranch->path))
+        goto unlockRepos;
+
+    // Copy branch
+    if (!Global::copyDir(sourceBranch->path, destBranch->path, true))
+        goto unlockRepos;
+
+    // Remove old branch from list
+    for (int i = 0; i < branches.size(); ++i) {
+        Branch *branch = branches[i];
+
+        if (branch->name != destBranch->name)
+            continue;
+
+        branches.removeAt(i);
+        delete branch;
+        break;
+    }
+
+    // Create new branch and add it to the list
+    destBranch = new Branch(destBranchName, Global::getConfig().repoDir + "/" + destBranchName);
+
+    if (!destBranch->init()) {
+        cerr << "error: failed to init branch '" << destBranchName.toUtf8().data() << "'!" << endl;
+        delete (destBranch);
+        goto unlockSourceRepos;
+    }
+
+    branches.append(destBranch);
+
+    // Send e-mail
+    Global::sendMemoEMail(QString("### BoxIt memo ###\n\nUser %1 created a snapshot of branch '%2' to '%3'.").arg(username, sourceBranchName, destBranchName), QStringList());
+
+
+    returnCode = true;
+
+unlockRepos:
+
+    // Unlock repos again
+    for (int i = 0; i < destBranch->repos.size(); ++i) {
+        Repo *repo = destBranch->repos[i];
+
+        if (repo->getLockedSessionID() == sessionID)
+            repo->unlock();
+    }
+
+unlockSourceRepos:
+    for (int i = 0; i < sourceBranch->repos.size(); ++i) {
+        Repo *repo = sourceBranch->repos[i];
+
+        if (repo->getLockedSessionID() == sessionID)
+            repo->unlock();
+    }
+
+    return returnCode;
 }
 
 

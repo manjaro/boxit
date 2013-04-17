@@ -26,7 +26,58 @@ Status Status::self;
 QMutex Status::mutex;
 QList<Status::BranchStatus> Status::branches;
 QList<Status::RepoStatus> Status::repos;
+QList<Status::RepoCommit> Status::repoCommits;
 
+
+
+
+Status::Status()
+{
+    timer.setInterval(60000); // 60 sec
+
+    commitTimer.setInterval(5000); // 5 sec
+    commitTimer.setSingleShot(true);
+
+    // Connect signals and slots
+    connect(&timer, SIGNAL(timeout())   ,   this, SLOT(timeout()));
+    connect(&commitTimer, SIGNAL(timeout())   ,   this, SLOT(commitTimeout()));
+}
+
+
+
+void Status::setRepoCommit(const QString username, const QString branchName, const QString name, const QString architecture, const QStringList & addPackages, const QStringList & removePackages) {
+    QMutexLocker locker(&mutex);
+
+    // Find item if already in list
+    for (int i = 0; i < repoCommits.size(); ++i) {
+        RepoCommit *repo = &repoCommits[i];
+
+        if (repo->username != username || repo->branchName != branchName || repo->name != name || repo->architecture != architecture)
+            continue;
+
+        repo->addPackages = addPackages;
+        repo->removePackages = removePackages;
+
+        // Restart timer
+        self.restartCommitTimer();
+
+        return;
+    }
+
+    // Create item if not already in list
+    RepoCommit repo;
+    repo.username = username;
+    repo.branchName = branchName;
+    repo.name = name;
+    repo.architecture = architecture;
+    repo.addPackages = addPackages;
+    repo.removePackages = removePackages;
+
+    repoCommits.append(repo);
+
+    // Restart timer
+    self.restartCommitTimer();
+}
 
 
 
@@ -123,6 +174,8 @@ QList<Status::BranchStatus> Status::getBranchesStatus() {
 
 
 void Status::branchSessionChanged(const int sessionID, bool success) {
+    QMutexLocker locker(&mutex);
+
     if (success)
         emit self.branchSessionFinished(sessionID);
     else
@@ -132,8 +185,19 @@ void Status::branchSessionChanged(const int sessionID, bool success) {
 
 
 void Status::init() {
-    timer.setInterval(60000);
-    connect(&timer, SIGNAL(timeout())   ,   this, SLOT(timeout()));
+    self.initSelf();
+}
+
+
+
+void Status::restartCommitTimer() {
+    commitTimer.stop();
+    commitTimer.start();
+}
+
+
+
+void Status::initSelf() {
     timer.start();
 }
 
@@ -188,4 +252,79 @@ void Status::timeout() {
     // Trigger signal if something has changed
     if (changed)
         emit stateChanged();
+}
+
+
+
+void Status::commitTimeout() {
+    QMutexLocker locker(&mutex);
+
+    // Sort
+    QMap<QString, QList<RepoCommit*> > map;
+
+    for (int i = 0; i < repoCommits.size(); ++i) {
+        RepoCommit *repo = &repoCommits[i];
+
+        // Add to map
+        map[repo->username].append(repo);
+    }
+
+    // Send e-mails
+    QMapIterator<QString, QList<RepoCommit*> > it(map);
+    while (it.hasNext()) {
+        it.next();
+
+        QStringList attachments;
+
+        // Create working folder
+        if ((QDir(BOXIT_STATUS_TMP).exists() && !Global::rmDir(BOXIT_STATUS_TMP))) {
+            cerr << "error: failed to remove folder '" << BOXIT_STATUS_TMP << "'" << endl;
+            continue;
+        }
+
+        if (!QDir().mkpath(BOXIT_STATUS_TMP)) {
+            cerr << "error: failed to create folder '" << BOXIT_STATUS_TMP << "'" << endl;
+            continue;
+        }
+
+        QString message = "### BoxIt memo ###\n\n";
+        message += QString("User %1 committed following changes:\n\n").arg(it.key());
+
+        for (int i = 0; i < it.value().size(); ++i) {
+            RepoCommit *repo = it.value()[i];
+
+            message += QString(" - %1 %2 %3:\t%4 new and %5 removed package(s)\n").arg(repo->branchName, repo->name, repo->architecture,
+                                                                                    QString::number(repo->addPackages.size()),
+                                                                                    QString::number(repo->removePackages.size()));
+
+            // Create attachment file
+            QFile file(QString(BOXIT_STATUS_TMP) + "/" + repo->branchName + "_" + repo->name + "_" + repo->architecture);
+            if (!file.open(QIODevice::WriteOnly | QIODevice::Text))
+                continue;
+
+            QTextStream out(&file);
+            if (!repo->addPackages.isEmpty()) {
+                out << "[New Packages]\n" << repo->addPackages.join("\n");
+
+                if (!repo->removePackages.isEmpty())
+                    out << "\n\n\n";
+            }
+
+            if (!repo->removePackages.isEmpty())
+                out << "[Removed Packages]\n" << repo->removePackages.join("\n");
+
+            file.close();
+
+            // Add to list
+            attachments.append(file.fileName());
+        }
+
+
+        // Send e-mail
+        if (!Global::sendMemoEMail(message, attachments))
+            cerr << "error: failed to send e-mail!" << endl;
+    }
+
+    // Clean up
+    repoCommits.clear();
 }

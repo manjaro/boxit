@@ -53,6 +53,7 @@ public:
     static bool setBranchUrl(const QString branchName, const QString url);
     static bool getBranchSyncExcludeFiles(const QString branchName, QString & excludeFilesContent);
     static bool setBranchSyncExcludeFiles(const QString branchName, const QString excludeFilesContent);
+    static bool isBranchLocked(const QString branchName);
 
     static bool getRepos(const QString branchName, QList<Database::RepoInfo> & list);
     static bool lockRepo(const QString branchName, const QString repoName, const QString repoArchitecture, const int sessionID, const QString username);
@@ -66,6 +67,7 @@ public:
     static void releasePoolLock(const int sessionID);
 
     static bool synchronizeBranch(const QString branchName, const QString username, int & syncSessionID);
+    static bool snapshotBranch(const QString sourceBranchName, const QString destBranchName, const QString username, const int sessionID);
 
     static void releaseSession(const int sessionID);
 

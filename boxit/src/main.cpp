@@ -54,10 +54,11 @@ enum ARGUMENTS {
     ARG_PULL = 0x0001,
     ARG_PUSH = 0x0002,
     ARG_INIT = 0x0004,
-    ARG_SHELL = 0x0008,
+    ARG_PASSWD = 0x0008,
     ARG_STATE = 0x0010,
     ARG_ERRORS = 0x0020,
-    ARG_SYNC = 0x0040
+    ARG_SYNC = 0x0040,
+    ARG_SNAP = 0x0080
 };
 
 
@@ -141,7 +142,11 @@ bool printErrors();
 
 bool syncBranch();
 bool changeSyncUrlOnRequest(const QString branchName);
-bool changeSyncExcludeFiles(const QString branchName) ;
+bool changeSyncExcludeFiles(const QString branchName);
+
+bool changePassword();
+
+bool snapshotBranch();
 
 
 // Auto completion
@@ -187,8 +192,8 @@ int main(int argc, char *argv[])
             printHelp();
             return 0;
         }
-        else if (strcmp(argv[nArg], "shell") == 0) {
-            arguments = (ARGUMENTS)(arguments | ARG_SHELL);
+        else if (strcmp(argv[nArg], "passwd") == 0) {
+            arguments = (ARGUMENTS)(arguments | ARG_PASSWD);
         }
         else if (strcmp(argv[nArg], "pull") == 0) {
             arguments = (ARGUMENTS)(arguments | ARG_PULL);
@@ -208,6 +213,9 @@ int main(int argc, char *argv[])
         else if (strcmp(argv[nArg], "sync") == 0) {
             arguments = (ARGUMENTS)(arguments | ARG_SYNC);
         }
+        else if (strcmp(argv[nArg], "snap") == 0) {
+            arguments = (ARGUMENTS)(arguments | ARG_SNAP);
+        }
         else {
             cerr << "invalid option: " << argv[nArg] << endl << endl;
             printHelp();
@@ -225,15 +233,22 @@ int main(int argc, char *argv[])
         cerr << "error: cannot push, pull or init at once!" << endl;
         return 1;
     }
-    else if (arguments & ARG_SHELL && (arguments & ARG_PULL || arguments & ARG_PUSH || arguments & ARG_INIT)) {
-        cerr << "error: cannot run BoxIt shell with push, pull or init arguments!" << endl;
-        return 1;
-    }
-
 
     // Sync argument
     if (arguments & ARG_SYNC) {
         if (syncBranch())   return 0;
+        else                return 1; // Error messages are printed by the method
+    }
+
+    // Snap argument
+    if (arguments & ARG_SNAP) {
+        if (snapshotBranch())   return 0;
+        else                return 1; // Error messages are printed by the method
+    }
+
+    // Passwd argument
+    if (arguments & ARG_PASSWD) {
+        if (changePassword())  return 0;
         else                return 1; // Error messages are printed by the method
     }
 
@@ -303,9 +318,10 @@ void printHelp() {
     cout << "  pull\t\tupdate an existing branch" << endl;
     cout << "  push\t\tupload all changes" << endl;
     cout << "  sync\t\tsynchronize branch" << endl;
+    cout << "  snap\t\tsnapshot branch" << endl;
     cout << "  state\t\tshow state" << endl;
     cout << "  errors\tshow all remote errors" << endl;
-    cout << "  shell\t\trun BoxIt shell" << endl;
+    cout << "  passwd\tchange user password" << endl;
     cout << endl;
 }
 
@@ -2212,7 +2228,11 @@ bool syncBranch() {
     boxitSocket.sendData(MSG_SYNC_BRANCH, QByteArray(branchName.toAscii()));
     boxitSocket.readData(msgID);
 
-    if (msgID != MSG_SUCCESS) {
+    if (msgID == MSG_IS_LOCKED) {
+        cerr << "error: at least one branch repository is already locked by another process!" << endl;
+        return false;
+    }
+    else if (msgID != MSG_SUCCESS) {
         cerr << "error: failed to start synchronization process! The branch might not exists or another synchronization process is running..." << endl;
         return false;
     }
@@ -2357,6 +2377,137 @@ bool changeSyncExcludeFiles(const QString branchName) {
         cerr << "error: failed to set new exclude content!" << endl;
         return false;
     }
+
+    return true;
+}
+
+
+
+bool changePassword() {
+    QString host = "";
+    if (!connectIfRequired(host))
+        return false; // Error messages are printed by the method
+
+    cout << ":: Set new password" << endl;
+
+    QString oldPasswd = getInput(" old password: ", true, false);
+    QString newPasswd = getInput(" new password: ", true, false);
+    QString confirmNewPasswd = getInput(" confirm password: ", true, false);
+
+    if (newPasswd != confirmNewPasswd) {
+        cerr << "error: entered passwords are not equal!" << endl;
+        return false;
+    }
+    else if (newPasswd.size() < 6) {
+        cerr << "error: new password is too short! Use at least 6 words..." << endl;
+        return false;
+    }
+    else if (newPasswd == oldPasswd) {
+        cerr << "error: new password is equal to the current password!" << endl;
+        return false;
+    }
+
+    // Create the password hash
+    oldPasswd = QString(QCryptographicHash::hash(oldPasswd.toLocal8Bit(), QCryptographicHash::Sha1).toHex());
+    newPasswd = QString(QCryptographicHash::hash(newPasswd.toLocal8Bit(), QCryptographicHash::Sha1).toHex());
+
+    boxitSocket.sendData(MSG_SET_PASSWD, QByteArray(QString(oldPasswd + BOXIT_SPLIT_CHAR + newPasswd).toAscii()));
+    boxitSocket.readData(msgID);
+
+    if (msgID == MSG_ERROR_WRONG_PASSWORD) {
+        cerr << "error: entered password was wrong!" << endl;
+        return false;
+    }
+    else if (msgID != MSG_SUCCESS) {
+        cerr << "error: failed to set new password!" << endl;
+        return false;
+    }
+
+    cout << ":: Password changed." << endl;
+
+    return true;
+}
+
+
+
+bool snapshotBranch() {
+    QString host = "";
+    if (!connectIfRequired(host))
+        return false; // Error messages are printed by the method
+
+    // List all available branches
+    QStringList branches;
+
+    if (!getAllRemoteBranches(branches))
+        return false; // Error messages are printed by the method
+
+    cout << ":: Available branches:" << endl << endl;
+    for (int i = 0; i < branches.size(); ++i) {
+        cout << " " << QString::number(i + 1).toUtf8().data() << ") " << branches.at(i).toUtf8().data() << endl;
+    }
+    cout << endl;
+
+
+    // Get user input
+    int index;
+
+    while (true) {
+        index = getInput(":: Source Branch index: ", false, false).trimmed().toInt();
+
+        if (index <= 0 || index > branches.size()) {
+            cerr << "error: index is invalid!" << endl;
+            continue;
+        }
+
+        break;
+    }
+    --index;
+
+    const QString sourceBranchName = branches.at(index);
+
+
+    while (true) {
+        index = getInput(":: Destination Branch index: ", false, false).trimmed().toInt();
+
+        if (index <= 0 || index > branches.size()) {
+            cerr << "error: index is invalid!" << endl;
+            continue;
+        }
+
+        break;
+    }
+    --index;
+
+    const QString destBranchName = branches.at(index);
+
+
+    if (sourceBranchName == destBranchName) {
+        cerr << "error: source and destination branch can't be the same!" << endl;
+        return false;
+    }
+
+    // Ask user to continue
+    QString answer = getInput(QString(":: Create a snapshot of branch '%1' and save it to branch '%2'.\n   Continue? [y/N] ").arg(sourceBranchName, destBranchName), false, false).toLower().trimmed();
+    if (answer != "y") {
+        cerr << "abording..." << endl;
+        return false;
+    }
+
+
+    // Send snap request
+    boxitSocket.sendData(MSG_SNAP_BRANCH, QByteArray(QString(sourceBranchName + BOXIT_SPLIT_CHAR + destBranchName).toAscii()));
+    boxitSocket.readData(msgID);
+
+    if (msgID == MSG_IS_LOCKED) {
+        cerr << "error: at least one branch repository is already locked by another process!" << endl;
+        return false;
+    }
+    else if (msgID != MSG_SUCCESS) {
+        cerr << "error: failed to create a snapshot of branch '" << sourceBranchName.toUtf8().data() << "'!" << endl;
+        return false;
+    }
+
+    cout << ":: Snapshot created." << endl;
 
     return true;
 }

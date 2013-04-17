@@ -97,7 +97,7 @@ int main(int argc, char *argv[])
     // Initialize repositories
     cout << "initializing repositories..." << endl;
     Database::init();
-    Status::self.init();
+    Status::init();
 
 
     // Start main timer

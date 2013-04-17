@@ -52,8 +52,8 @@ public:
     static QString getVersionofPKG(QString pkg);
     static bool fixFilePermission(QString file);
     static QByteArray sha1CheckSum(QString filePath);
-    static bool sendMemoEMail(QString username, QString repository, QString architecture, QStringList addedFiles, QStringList removedFiles);
-    static bool sendEMail(QString subject, QString to, QString text);
+    static bool sendMemoEMail(QString mailMessage, QStringList attachments);
+    static bool sendEMail(QString subject, QString to, QString text, QStringList attachments);
     static bool rmDir(QString path, bool onlyHidden = false, bool onlyContent = false);
     static bool copyDir(QString src, QString dst, bool hidden = false);
     static Config getConfig();

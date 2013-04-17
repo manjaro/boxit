@@ -24,6 +24,8 @@ Branch::Branch(const QString name, const QString path) :
     name(name),
     path(path)
 {
+    moveToThread(qApp->thread());
+    setParent(qApp);
 }
 
 
@@ -204,6 +206,9 @@ void Branch::setNewBranchState() {
     out << "\ndate=" << QDateTime::currentDateTime().toString(Qt::ISODate);
 
     file.close();
+
+    // Fix file permission
+    Global::fixFilePermission(path + "/" + BOXIT_BRANCH_STATE_FILE);
 }
 
 

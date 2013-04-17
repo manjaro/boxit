@@ -27,6 +27,7 @@
 #include <QStringList>
 #include <QMutex>
 #include <QMutexLocker>
+#include <QCoreApplication>
 
 #include "global.h"
 #include "const.h"

@@ -282,7 +282,14 @@ void BoxitInstance::read_Data(quint16 msgID, QByteArray data) {
     }
     case MSG_SYNC_BRANCH:
     {
-        if (!Database::synchronizeBranch(QString(data), user.getUsername(), syncSessionID)) {
+        const QString branchName = QString(data);
+
+        if (Database::isBranchLocked(branchName)) {
+            sendData(MSG_IS_LOCKED);
+            break;
+        }
+
+        if (!Database::synchronizeBranch(branchName, user.getUsername(), syncSessionID)) {
             syncSessionID = -1;
             sendData(MSG_ERROR);
             break;
@@ -343,6 +350,47 @@ void BoxitInstance::read_Data(quint16 msgID, QByteArray data) {
         split.removeFirst();
 
         if (!Database::setBranchSyncExcludeFiles(branchName, split.join(BOXIT_SPLIT_CHAR))) {
+            sendData(MSG_ERROR);
+            break;
+        }
+
+        sendData(MSG_SUCCESS);
+        break;
+    }
+    case MSG_SET_PASSWD:
+    {
+        QStringList split = QString(data).split(BOXIT_SPLIT_CHAR, QString::SkipEmptyParts);
+
+        if (split.size() < 2) {
+            sendData(MSG_ERROR);
+            break;
+        }
+        else if (!user.comparePassword(split.at(0))) {
+            sendData(MSG_ERROR_WRONG_PASSWORD);
+            break;
+        }
+        else if (!user.setPassword(split.at(1)) || !UserDatabase::setUserData(user)) {
+            sendData(MSG_ERROR);
+            break;
+        }
+
+        sendData(MSG_SUCCESS);
+        break;
+    }
+    case MSG_SNAP_BRANCH:
+    {
+        QStringList split = QString(data).split(BOXIT_SPLIT_CHAR, QString::SkipEmptyParts);
+        if (split.size() < 2) {
+            sendData(MSG_ERROR);
+            break;
+        }
+
+        if (Database::isBranchLocked(split.at(0)) || Database::isBranchLocked(split.at(1))) {
+            sendData(MSG_IS_LOCKED);
+            break;
+        }
+
+        if (!Database::snapshotBranch(split.at(0), split.at(1), user.getUsername(), sessionID)) {
             sendData(MSG_ERROR);
             break;
         }

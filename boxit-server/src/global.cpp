@@ -97,41 +97,12 @@ QByteArray Global::sha1CheckSum(QString filePath) {
 
 
 
-bool Global::sendMemoEMail(QString username, QString repository, QString architecture, QStringList addedFiles, QStringList removedFiles) {
-    if (removedFiles.isEmpty() && addedFiles.isEmpty())
-        return true;
-
-    // Prepare e-mail message
-    removedFiles.sort();
-    addedFiles.sort();
-
-    QString mailMessage = "### BoxIt memo ###\n\n";
-    mailMessage += QString("User %1").arg(username);
-
-    if (!addedFiles.isEmpty())
-        mailMessage += QString(" committed %1 new package(s)").arg(QString::number(addedFiles.size()));
-
-    if (!addedFiles.isEmpty() && !removedFiles.isEmpty())
-        mailMessage += " and";
-
-    if (!removedFiles.isEmpty())
-        mailMessage += QString(" removed %1 package(s) from repository %2 %3").arg(QString::number(removedFiles.size()), repository, architecture);
-    else
-        mailMessage += QString(" to repository %1 %2").arg(repository, architecture);
-
-    mailMessage += ".";
-
-    if (!addedFiles.isEmpty())
-        mailMessage += "\n\n\n### New package(s) ###\n\n" + addedFiles.join("\n");
-
-    if (!removedFiles.isEmpty())
-        mailMessage += "\n\n\n### Removed package(s) ###\n\n" + removedFiles.join("\n");
-
+bool Global::sendMemoEMail(QString mailMessage, QStringList attachments) {
     // Send e-mail message to mailing lists
     bool ret = true;
 
     for (int i = 0; i < config.mailingListEMails.size(); ++i) {
-        if (!Global::sendEMail("[BoxIt] commit memo", config.mailingListEMails.at(i), mailMessage))
+        if (!Global::sendEMail("[BoxIt] Memo", config.mailingListEMails.at(i), mailMessage, attachments))
             ret = false;
     }
 
@@ -140,9 +111,16 @@ bool Global::sendMemoEMail(QString username, QString repository, QString archite
 
 
 
-bool Global::sendEMail(QString subject, QString to, QString text) {
+bool Global::sendEMail(QString subject, QString to, QString text, QStringList attachments) {
+    QStringList args;
+
+    foreach (QString attachment, attachments)
+        args << "-a" << attachment;
+
+    args << "-s" << subject << to;
+
     QProcess process;
-    process.start("mail", QStringList() << "-s" << subject << to);
+    process.start("mail", args);
     if (!process.waitForStarted())
         return false;
 
@@ -219,7 +197,7 @@ bool Global::copyDir(QString src, QString dst, bool hidden) {
         QFileInfo info(src + "/" + list.at(i));
 
         if (info.isDir()) {
-            if (!copyDir(src + "/" + list.at(i), dst + "/" + list.at(i)))
+            if (!copyDir(src + "/" + list.at(i), dst + "/" + list.at(i), hidden))
                 success = false;
         }
         else {

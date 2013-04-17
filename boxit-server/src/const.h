@@ -30,6 +30,7 @@
 #define BOXIT_USER_DBFILE "boxit/users.db"
 #define BOXIT_TMP "/var/tmp/boxit"
 #define BOXIT_SESSION_TMP "/var/tmp/boxit/sessions"
+#define BOXIT_STATUS_TMP "/var/tmp/boxit/status"
 #define BOXIT_DB_CONFIG ".config"
 #define BOXIT_DB_SYNC_EXCLUDE ".sync_exclude"
 #define BOXIT_ARCHITECTURES "i686 x86_64"
@@ -54,6 +55,7 @@
 #define MSG_SUCCESS 100
 #define MSG_CHECK_VERSION 101
 #define MSG_AUTHENTICATE 102
+#define MSG_IS_LOCKED 103
 
 #define MSG_GET_BRANCHES 110
 #define MSG_DATA_BRANCH 111
@@ -87,6 +89,8 @@
 #define MSG_STATUS_SESSION_FAILED 157
 
 #define MSG_SYNC_BRANCH 160
+#define MSG_SET_PASSWD 161
+#define MSG_SNAP_BRANCH 162
 
 #define MSG_FILE_CHECKSUM 170
 #define MSG_FILE_UPLOAD 171
@@ -98,5 +102,6 @@
 #define MSG_ERROR 200
 #define MSG_ERROR_NOT_AUTHORIZED 201
 #define MSG_ERROR_WRONG_CHECKSUM 202
+#define MSG_ERROR_WRONG_PASSWORD 203
 
 #endif // CONST_H

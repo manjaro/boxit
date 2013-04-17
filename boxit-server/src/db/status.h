@@ -28,7 +28,17 @@
 #include <QMutex>
 #include <QMutexLocker>
 #include <QTimer>
+#include <QMap>
+#include <QFile>
+#include <QTextStream>
+#include <QDir>
+#include <iostream>
 
+#include "const.h"
+#include "global.h"
+
+
+using namespace std;
 
 
 class Status : public QObject
@@ -54,7 +64,13 @@ public:
         int timeout;
     };
 
+    struct RepoCommit {
+        QString username, branchName, name, architecture;
+        QStringList addPackages, removePackages;
+    };
 
+
+    static void setRepoCommit(const QString username, const QString branchName, const QString name, const QString architecture, const QStringList & addPackages, const QStringList & removePackages);
     static void setRepoStateChanged(const QString branchName, const QString name, const QString architecture, const QString job, const QString error, const Status::STATE state);
     static void setBranchStateChanged(const QString name, const QString job, const QString error, const Status::STATE state);
     static QList<Status::RepoStatus> getReposStatus();
@@ -64,22 +80,30 @@ public:
 
     static Status self;
 
-    void init();
+    static void init();
+
+    explicit Status();
 
 signals:
     void stateChanged();
     void branchSessionFinished(int sessionID);
     void branchSessionFailed(int sessionID);
 
+protected:
+    void restartCommitTimer();
+    void initSelf();
+
 private:
     static QMutex mutex;
     static QList<BranchStatus> branches;
     static QList<RepoStatus> repos;
+    static QList<RepoCommit> repoCommits;
     
-    QTimer timer;
+    QTimer timer, commitTimer;
 
 private slots:
     void timeout();
+    void commitTimeout();
 
 };
 
