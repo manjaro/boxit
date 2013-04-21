@@ -4,7 +4,7 @@
 #   repo-remove - remove a package entry from a given repo database file
 #   Generated from repo-add.sh.in; do not edit by hand.
 #
-#   Copyright (c) 2006-2012 Pacman Development Team <pacman-dev@archlinux.org>
+#   Copyright (c) 2006-2013 Pacman Development Team <pacman-dev@archlinux.org>
 #
 #   This program is free software; you can redistribute it and/or modify
 #   it under the terms of the GNU General Public License as published by
@@ -25,42 +25,56 @@ shopt -s extglob
 export TEXTDOMAIN='pacman-scripts'
 export TEXTDOMAINDIR='/usr/share/locale'
 
-myver='4.0.3'
-confdir='/etc'
+declare -r myver='4.1.0'
+declare -r confdir='/etc'
 
 QUIET=0
 DELTA=0
+ONLYADDNEW=0
 WITHFILES=0
 SIGN=0
 VERIFY=0
 REPO_DB_FILE=
 LOCKFILE=
 CLEAN_LOCK=0
+USE_COLOR='y'
 
 # ensure we have a sane umask set
 umask 0022
 
+plain() {
+	(( QUIET )) && return
+	local mesg=$1; shift
+	printf "${BOLD}    ${mesg}${ALL_OFF}\n" "$@" >&1
+}
+
 msg() {
 	(( QUIET )) && return
 	local mesg=$1; shift
-	printf "==> ${mesg}\n" "$@" >&1
+	printf "${GREEN}==>${ALL_OFF}${BOLD} ${mesg}${ALL_OFF}\n" "$@" >&1
 }
 
 msg2() {
 	(( QUIET )) && return
 	local mesg=$1; shift
-	printf "  -> ${mesg}\n" "$@" >&1
+	printf "${BLUE}  ->${ALL_OFF}${BOLD} ${mesg}${ALL_OFF}\n" "$@" >&1
+}
+
+ask() {
+	local mesg=$1; shift
+	printf "${BLUE}::${ALL_OFF}${BOLD} ${mesg}${ALL_OFF}" "$@" >&1
 }
 
 warning() {
 	local mesg=$1; shift
-	printf "==> $(gettext "WARNING:") ${mesg}\n" "$@" >&2
+	printf "${YELLOW}==> $(gettext "WARNING:")${ALL_OFF}${BOLD} ${mesg}${ALL_OFF}\n" "$@" >&2
 }
 
 error() {
 	local mesg=$1; shift
-	printf "==> $(gettext "ERROR:") ${mesg}\n" "$@" >&2
+	printf "${RED}==> $(gettext "ERROR:")${ALL_OFF}${BOLD} ${mesg}${ALL_OFF}\n" "$@" >&2
 }
+
 
 # print usage instructions
 usage() {
@@ -75,6 +89,7 @@ Multiple packages to add can be specified on the command line.\n")"
 		printf -- "\n"
 		printf -- "$(gettext "Options:\n")"
 		printf -- "$(gettext "  -d, --delta       generate and add delta for package update\n")"
+		printf -- "$(gettext "  -n, --new         only add packages that are not already in the database\n")"
 		printf -- "$(gettext "  -f, --files       update database's file list\n")"
 	elif [[ $cmd == "repo-remove" ]] ; then
 		printf -- "$(gettext "Usage: repo-remove [options] <path-to-db> <packagename|delta> ...\n")"
@@ -89,6 +104,7 @@ packages to remove can be specified on the command line.\n")"
 		printf -- "$(gettext "Please move along, there is nothing to see here.\n")"
 		return
 	fi
+	printf -- "$(gettext "  --nocolor         turn off color in output\n")"
 	printf -- "$(gettext "  -q, --quiet       minimize output\n")"
 	printf -- "$(gettext "  -s, --sign        sign database with GnuPG after update\n")"
 	printf -- "$(gettext "  -k, --key <key>   use the specified key to sign the database\n")"
@@ -107,7 +123,7 @@ version() {
 	cmd=${0##*/}
 	printf "%s (pacman) %s\n\n" "$cmd" "$myver"
 	printf -- "$(gettext "\
-Copyright (c) 2006-2012 Pacman Development Team <pacman-dev@archlinux.org>\n\n\
+Copyright (c) 2006-2013 Pacman Development Team <pacman-dev@archlinux.org>\n\n\
 This is free software; see the source for copying conditions.\n\
 There is NO WARRANTY, to the extent permitted by law.\n")"
 }
@@ -128,7 +144,7 @@ format_entry() {
 find_pkgentry() {
 	local pkgname=$1
 	local pkgentry
-	for pkgentry in $tmpdir/tree/$pkgname*; do
+	for pkgentry in "$tmpdir/tree/$pkgname"*; do
 		name=${pkgentry##*/}
 		if [[ ${name%-*-*} = $pkgname ]]; then
 			echo $pkgentry
@@ -149,31 +165,31 @@ get_delta_pkgname() {
 # write a delta entry
 #   arg1 - path to delta file
 db_write_delta() {
-	deltafile="$1"
-	pkgname="$(get_delta_pkgname $deltafile)"
+	deltafile=$1
+	pkgname=$(get_delta_pkgname "$deltafile")
 
-	pkgentry=$(find_pkgentry $pkgname)
+	pkgentry=$(find_pkgentry "$pkgname")
 	if [[ -z $pkgentry ]]; then
 		error "$(gettext "No database entry for package '%s'.")" "$pkgname"
 		return 1
 	fi
-	deltas="$pkgentry/deltas"
+	deltas=$pkgentry/deltas
 	if [[ ! -f $deltas ]]; then
-		echo -e "%DELTAS%" >$deltas
+		echo -e "%DELTAS%" >"$deltas"
 	fi
 	# get md5sum and compressed size of package
-	md5sum="$(openssl dgst -md5 "$deltafile")"
-	md5sum="${md5sum##* }"
+	md5sum=$(openssl dgst -md5 "$deltafile")
+	md5sum=${md5sum##* }
 	csize=$(stat -c %s -L "$deltafile")
 
-	oldfile=$(xdelta3 printhdr $deltafile | grep "XDELTA filename (source)" | sed 's/.*: *//')
-	newfile=$(xdelta3 printhdr $deltafile | grep "XDELTA filename (output)" | sed 's/.*: *//')
+	oldfile=$(xdelta3 printhdr "$deltafile" | grep "XDELTA filename (source)" | sed 's/.*: *//')
+	newfile=$(xdelta3 printhdr "$deltafile" | grep "XDELTA filename (output)" | sed 's/.*: *//')
 
-	if grep -q "$oldfile.*$newfile" $deltas; then
-		sed -i.backup "/$oldfile.*$newfile/d" $deltas && rm -f $deltas.backup
+	if grep -q "$oldfile.*$newfile" "$deltas"; then
+		sed -i.backup "/$oldfile.*$newfile/d" "$deltas" && rm -f "$deltas.backup"
 	fi
 	msg2 "$(gettext "Adding 'deltas' entry : %s -> %s")" "$oldfile" "$newfile"
-	echo ${deltafile##*/} $md5sum $csize $oldfile $newfile >> $deltas
+	echo "${deltafile##*/} $md5sum $csize $oldfile $newfile" >> "$deltas"
 
 	return 0
 } # end db_write_delta
@@ -181,21 +197,26 @@ db_write_delta() {
 # remove a delta entry
 #   arg1 - path to delta file
 db_remove_delta() {
-	deltafile="$1"
+	deltafile=$1
 	filename=${deltafile##*/}
-	pkgname="$(get_delta_pkgname $deltafile)"
+	pkgname=$(get_delta_pkgname "$deltafile")
 
-	pkgentry=$(find_pkgentry $pkgname)
+	pkgentry=$(find_pkgentry "$pkgname")
 	if [[ -z $pkgentry ]]; then
 		return 1
 	fi
-	deltas="$pkgentry/deltas"
+	deltas=$pkgentry/deltas
 	if [[ ! -f $deltas ]]; then
 		return 1
 	fi
-	if grep -q "$filename" $deltas; then
-		sed -i.backup "/$filename/d" $deltas && rm -f $deltas.backup
+	if grep -q "$filename" "$deltas"; then
+		sed -i.backup "/$filename/d" "$deltas" && rm -f "$deltas.backup"
 		msg2 "$(gettext "Removing existing entry '%s'...")" "$filename"
+		# empty deltas file contains only "%DELTAS%"
+		if (( $(wc -l < "$deltas") == 1 )); then
+			msg2 "$(gettext "Removing empty deltas file ...")"
+			rm "$deltas"
+		fi
 		return 0
 	fi
 
@@ -212,7 +233,7 @@ check_gpg() {
 # sign the package database once repackaged
 create_signature() {
 	(( ! SIGN )) && return
-	local dbfile="$1"
+	local dbfile=$1
 	local ret=0
 	msg "$(gettext "Signing database...")"
 
@@ -223,7 +244,7 @@ create_signature() {
 	gpg --detach-sign --use-agent ${SIGNWITHKEY} "$dbfile" &>/dev/null || ret=$?
 
 	if (( ! ret )); then
-		msg2 "$(gettext "Created signature file %s.")" "${dbfile##*/}.sig"
+		msg2 "$(gettext "Created signature file '%s'")" "${dbfile##*/.tmp.}.sig"
 	else
 		warning "$(gettext "Failed to sign package database.")"
 	fi
@@ -232,7 +253,7 @@ create_signature() {
 # verify the existing package database signature
 verify_signature() {
 	(( ! VERIFY )) && return
-	local dbfile="$1"
+	local dbfile=$1
 	local ret=0
 	msg "$(gettext "Verifying database signature...")"
 
@@ -252,7 +273,7 @@ verify_signature() {
 verify_repo_extension() {
 	local repofile=$1
 
-	case "$repofile" in
+	case $repofile in
 		*.@(db|files).tar.gz)  TAR_OPT="z" ;;
 		*.@(db|files).tar.bz2) TAR_OPT="j" ;;
 		*.@(db|files).tar.xz)  TAR_OPT="J" ;;
@@ -270,8 +291,9 @@ verify_repo_extension() {
 #   arg1 - path to package
 db_write_entry() {
 	# blank out all variables
-	local pkgfile="$1"
-	local -a _groups _licenses _replaces _depends _conflicts _provides _optdepends
+	local pkgfile=$1
+	local -a _groups _licenses _replaces _depends _conflicts _provides \
+		_optdepends _makedepends _checkdepends
 	local pkgname pkgver pkgdesc csize size url arch builddate packager \
 		md5sum sha256sum pgpsig pgpsigsize
 
@@ -283,14 +305,16 @@ db_write_entry() {
 
 		# normalize whitespace with an extglob
 		declare "$var=${val//+([[:space:]])/ }"
-		case "$var" in
-			group)     _groups+=("$group") ;;
-			license)   _licenses+=("$license") ;;
-			replaces)  _replaces+=("$replaces") ;;
-			depend)    _depends+=("$depend") ;;
-			conflict)  _conflicts+=("$conflict") ;;
-			provides)  _provides+=("$provides") ;;
+		case $var in
+			group) _groups+=("$group") ;;
+			license) _licenses+=("$license") ;;
+			replaces) _replaces+=("$replaces") ;;
+			depend) _depends+=("$depend") ;;
+			conflict) _conflicts+=("$conflict") ;;
+			provides) _provides+=("$provides") ;;
 			optdepend) _optdepends+=("$optdepend") ;;
+			makedepend) _makedepends+=("$makedepend") ;;
+			checkdepend) _checkdepends+=("$checkdepend") ;;
 		esac
 	done< <(bsdtar -xOqf "$pkgfile" .PKGINFO)
 
@@ -302,12 +326,15 @@ db_write_entry() {
 
 	if [[ -d $tmpdir/tree/$pkgname-$pkgver ]]; then
 		warning "$(gettext "An entry for '%s' already existed")" "$pkgname-$pkgver"
+		if (( ONLYADDNEW )); then
+			return 0;
+		fi
 	else
 		if (( DELTA )); then
-			pkgentry=$(find_pkgentry $pkgname)
+			pkgentry=$(find_pkgentry "$pkgname")
 			if [[ -n $pkgentry ]]; then
-				local oldfilename=$(grep -A1 FILENAME $pkgentry/desc | tail -n1)
-				local oldfile="$(dirname $1)/$oldfilename"
+				local oldfilename=$(grep -A1 FILENAME "$pkgentry/desc" | tail -n1)
+				local oldfile="$(dirname "$1")/$oldfilename"
 			fi
 		fi
 	fi
@@ -327,10 +354,10 @@ db_write_entry() {
 
 	# compute checksums
 	msg2 "$(gettext "Computing checksums...")"
-	md5sum="$(openssl dgst -md5 "$pkgfile")"
-	md5sum="${md5sum##* }"
-	sha256sum="$(openssl dgst -sha256 "$pkgfile")"
-	sha256sum="${sha256sum##* }"
+	md5sum=$(openssl dgst -md5 "$pkgfile")
+	md5sum=${md5sum##* }
+	sha256sum=$(openssl dgst -sha256 "$pkgfile")
+	sha256sum=${sha256sum##* }
 
 	# remove an existing entry if it exists, ignore failures
 	db_remove_entry "$pkgname"
@@ -373,10 +400,12 @@ db_write_entry() {
 	# create depends entry
 	msg2 "$(gettext "Creating '%s' db entry...")" 'depends'
 	{
-		format_entry "DEPENDS"    "${_depends[@]}"
-		format_entry "CONFLICTS"  "${_conflicts[@]}"
-		format_entry "PROVIDES"   "${_provides[@]}"
+		format_entry "DEPENDS" "${_depends[@]}"
+		format_entry "CONFLICTS" "${_conflicts[@]}"
+		format_entry "PROVIDES" "${_provides[@]}"
 		format_entry "OPTDEPENDS" "${_optdepends[@]}"
+		format_entry "MAKEDEPENDS" "${_makedepends[@]}"
+		format_entry "CHECKDEPENDS" "${_checkdepends[@]}"
 	} >'depends'
 
 	popd >/dev/null
@@ -386,17 +415,17 @@ db_write_entry() {
 	if (( WITHFILES )); then
 		msg2 "$(gettext "Creating '%s' db entry...")" 'files'
 		local files_path="$tmpdir/tree/$pkgname-$pkgver/files"
-		echo "%FILES%" >$files_path
-		bsdtar --exclude='^.*' -tf "$pkgfile" >>$files_path
+		echo "%FILES%" >"$files_path"
+		bsdtar --exclude='^.*' -tf "$pkgfile" >>"$files_path"
 	fi
 
 	# create a delta file
 	if (( DELTA )); then
 		if [[ -n $oldfilename ]]; then
 			if [[ -f $oldfile ]]; then
-				delta=$(pkgdelta -q $oldfile $1)
+				delta=$(pkgdelta -q "$oldfile" "$1")
 				if [[ -f $delta ]]; then
-					db_write_delta $delta
+					db_write_delta "$delta"
 				fi
 			else
 				warning "$(gettext "Old package file not found: %s")" "$oldfilename"
@@ -412,7 +441,7 @@ db_write_entry() {
 db_remove_entry() {
 	local pkgname=$1
 	local notfound=1
-	local pkgentry=$(find_pkgentry $pkgname)
+	local pkgentry=$(find_pkgentry "$pkgname")
 	while [[ -n $pkgentry ]]; do
 		notfound=0
 		if [[ -f $pkgentry/deltas ]]; then
@@ -420,8 +449,8 @@ db_remove_entry() {
 		fi
 		msg2 "$(gettext "Removing existing entry '%s'...")" \
 		"${pkgentry##*/}"
-		rm -rf $pkgentry
-		pkgentry=$(find_pkgentry $pkgname)
+		rm -rf "$pkgentry"
+		pkgentry=$(find_pkgentry "$pkgname")
 	done
 	return $notfound
 } # end db_remove_entry
@@ -444,15 +473,10 @@ elephant() {
 check_repo_db() {
 	local repodir
 
-	# ensure the path to the DB exists
-	if [[ "$LOCKFILE" == /* ]]; then
-		repodir=${LOCKFILE%/*}/
-	else
-		repodir=$PWD/$LOCKFILE
-		repodir=${repodir%/*}/
-	fi
+	# ensure the path to the DB exists; $LOCKFILE is always an absolute path
+	repodir=${LOCKFILE%/*}/
 
-	if [[ ! -d "$repodir" ]]; then
+	if [[ ! -d $repodir ]]; then
 		error "$(gettext "%s does not exist or is not a directory.")" "$repodir"
 		exit 1
 	fi
@@ -462,7 +486,7 @@ check_repo_db() {
 		CLEAN_LOCK=1
 	else
 		error "$(gettext "Failed to acquire lockfile: %s.")" "$LOCKFILE"
-		[[ -f $LOCKFILE ]] && error "$(gettext "Held by process %s")" "$(cat $LOCKFILE)"
+		[[ -f $LOCKFILE ]] && error "$(gettext "Held by process %s")" "$(cat "$LOCKFILE")"
 		exit 1
 	fi
 
@@ -480,7 +504,7 @@ check_repo_db() {
 		msg "$(gettext "Extracting database to a temporary location...")"
 		bsdtar -xf "$REPO_DB_FILE" -C "$tmpdir/tree"
 	else
-		case "$cmd" in
+		case $cmd in
 			repo-remove)
 			error "$(gettext "Repository file '%s' was not found.")" "$REPO_DB_FILE"
 			exit 1
@@ -582,7 +606,7 @@ if ! type gettext &>/dev/null; then
 	}
 fi
 
-case "$1" in
+case $1 in
 	-h|--help) usage; exit 0;;
 	-V|--version) version; exit 0;;
 esac
@@ -599,10 +623,10 @@ if [[ $cmd != "repo-add" && $cmd != "repo-remove" ]]; then
 	exit 1
 fi
 
-tmpdir=$(mktemp -d /tmp/repo-tools.XXXXXXXXXX) || (\
+tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/repo-tools.XXXXXXXXXX") || (\
 	error "$(gettext "Cannot create temp directory for database building.")"; \
 	exit 1)
-mkdir $tmpdir/tree
+mkdir "$tmpdir/tree"
 
 trap 'clean_up' EXIT
 for signal in TERM HUP QUIT; do
@@ -615,10 +639,12 @@ declare -a args
 success=0
 # parse arguments
 while (( $# )); do
-	case "$1" in
+	case $1 in
 		-q|--quiet) QUIET=1;;
 		-d|--delta) DELTA=1;;
+		-n|--new) ONLYADDNEW=1;;
 		-f|--files) WITHFILES=1;;
+		--nocolor) USE_COLOR='n';;
 		-s|--sign)
 			check_gpg
 			SIGN=1
@@ -634,7 +660,7 @@ while (( $# )); do
 		-k|--key)
 			check_gpg
 			shift
-			GPGKEY="$1"
+			GPGKEY=$1
 			if ! gpg --list-key ${GPGKEY} &>/dev/null; then
 				error "$(gettext "The key ${GPGKEY} does not exist in your keyring.")"
 				exit 1
@@ -651,19 +677,46 @@ while (( $# )); do
 	shift
 done
 
+# check if messages are to be printed using color
+unset ALL_OFF BOLD BLUE GREEN RED YELLOW
+if [[ -t 2 && ! $USE_COLOR = "n" ]]; then
+	# prefer terminal safe colored and bold text when tput is supported
+	if tput setaf 0 &>/dev/null; then
+		ALL_OFF="$(tput sgr0)"
+		BOLD="$(tput bold)"
+		BLUE="${BOLD}$(tput setaf 4)"
+		GREEN="${BOLD}$(tput setaf 2)"
+		RED="${BOLD}$(tput setaf 1)"
+		YELLOW="${BOLD}$(tput setaf 3)"
+	else
+		ALL_OFF="\e[1;0m"
+		BOLD="\e[1;1m"
+		BLUE="${BOLD}\e[1;34m"
+		GREEN="${BOLD}\e[1;32m"
+		RED="${BOLD}\e[1;31m"
+		YELLOW="${BOLD}\e[1;33m"
+	fi
+fi
+readonly ALL_OFF BOLD BLUE GREEN RED YELLOW
+
+
 REPO_DB_FILE=${args[0]}
 if [[ -z $REPO_DB_FILE ]]; then
 	usage
 	exit 1
 fi
 
-LOCKFILE=$REPO_DB_FILE.lck
+if [[ $REPO_DB_FILE == /* ]]; then
+	LOCKFILE=$REPO_DB_FILE.lck
+else
+	LOCKFILE=$PWD/$REPO_DB_FILE.lck
+fi
 
 verify_repo_extension "$REPO_DB_FILE" >/dev/null
 check_repo_db
 
 for arg in "${args[@]:1}"; do
-	case "$cmd" in
+	case $cmd in
 		repo-add) add "$arg" ;;
 		repo-remove) remove "$arg" ;;
 	esac && success=1
@@ -674,37 +727,51 @@ if (( success )); then
 	msg "$(gettext "Creating updated database file '%s'")" "$REPO_DB_FILE"
 
 	TAR_OPT=$(verify_repo_extension "$REPO_DB_FILE")
+	# $LOCKFILE is already guaranteed to be absolute so this is safe
+	dirname=${LOCKFILE%/*}
 	filename=${REPO_DB_FILE##*/}
+	# this ensures we create it on the same filesystem, making moves atomic
+	tempname=$dirname/.tmp.$filename
 
 	pushd "$tmpdir/tree" >/dev/null
 	if ( shopt -s nullglob; files=(*); (( ${#files[*]} )) ); then
-		bsdtar -c${TAR_OPT}f "$tmpdir/$filename" *
+		bsdtar -c${TAR_OPT}f "$tempname" *
 	else
 		# we have no packages remaining? zip up some emptyness
 		warning "$(gettext "No packages remain, creating empty database.")"
-		bsdtar -c${TAR_OPT}f "$tmpdir/$filename" -T /dev/null
+		bsdtar -c${TAR_OPT}f "$tempname" -T /dev/null
 	fi
 	popd >/dev/null
 
-	create_signature "$tmpdir/$filename"
+	create_signature "$tempname"
 
-	[[ -f $REPO_DB_FILE ]] && mv -f "$REPO_DB_FILE" "${REPO_DB_FILE}.old"
+	# hardlink or move the previous version of the database and signature to .old
+	# extension as a backup measure
+	if [[ -f $REPO_DB_FILE ]]; then
+		ln -f "$REPO_DB_FILE" "$REPO_DB_FILE.old" 2>/dev/null || \
+			mv -f "$REPO_DB_FILE" "$REPO_DB_FILE.old"
+	fi
 	if [[ -f $REPO_DB_FILE.sig ]]; then
-		mv -f "$REPO_DB_FILE.sig" "$REPO_DB_FILE.old.sig"
+		ln -f "$REPO_DB_FILE.sig" "$REPO_DB_FILE.old.sig" 2>/dev/null || \
+			mv -f "$REPO_DB_FILE.sig" "$REPO_DB_FILE.old.sig"
 	else
 		rm -f "$REPO_DB_FILE.old.sig"
 	fi
-	[[ -f $tmpdir/$filename ]] && mv "$tmpdir/$filename" "$REPO_DB_FILE"
-	[[ -f $tmpdir/$filename.sig ]] && mv "$tmpdir/$filename.sig" "$REPO_DB_FILE.sig"
-	dblink="${REPO_DB_FILE%.tar*}"
-	target=${REPO_DB_FILE##*/}
+
+	# rotate the newly-created database and signature into place
+	mv "$tempname" "$REPO_DB_FILE"
+	if [[ -f $tempname.sig ]]; then
+		mv "$tempname.sig" "$REPO_DB_FILE.sig"
+	fi
+
+	dblink=${REPO_DB_FILE%.tar*}
 	rm -f "$dblink" "$dblink.sig"
-	ln -s "$target" "$dblink" 2>/dev/null || \
-		ln "$target" "$dblink" 2>/dev/null || \
+	ln -s "$filename" "$dblink" 2>/dev/null || \
+		ln "$filename" "$dblink" 2>/dev/null || \
 		cp "$REPO_DB_FILE" "$dblink"
 	if [[ -f "$REPO_DB_FILE.sig" ]]; then
-		ln -s "$target.sig" "$dblink.sig" 2>/dev/null || \
-			ln "$target.sig" "$dblink.sig" 2>/dev/null || \
+		ln -s "$filename.sig" "$dblink.sig" 2>/dev/null || \
+			ln "$filename.sig" "$dblink.sig" 2>/dev/null || \
 			cp "$REPO_DB_FILE.sig" "$dblink.sig"
 	fi
 else

@@ -11,7 +11,7 @@ LOCKFILE=/tmp/rsync-manjaro.lock
 
 
 synchronize() {
-    $RSYNC -rtlvH --delete-after --delay-updates --safe-links rsync://manjaro.org/repos "$DESTPATH"
+    $RSYNC -rtlvH --delete-after --delay-updates --safe-links rsync://repo.manjaro.org/repos "$DESTPATH"
 }
 
 
