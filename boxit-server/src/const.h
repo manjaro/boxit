@@ -26,8 +26,8 @@
 #define BOXIT_PORT 59872
 #define BOXIT_SPLIT_CHAR "|"
 #define BOXIT_SOCKET_MAX_SIZE 50000
-#define BOXIT_SERVER_CONFIG "boxit/boxit.conf"
-#define BOXIT_USER_DBFILE "boxit/users.db"
+#define BOXIT_SERVER_CONFIG "/etc/boxit/boxit.conf"
+#define BOXIT_USER_DBFILE "/etc/boxit/users.db"
 #define BOXIT_TMP "/var/tmp/boxit"
 #define BOXIT_SESSION_TMP "/var/tmp/boxit/sessions"
 #define BOXIT_STATUS_TMP "/var/tmp/boxit/status"
