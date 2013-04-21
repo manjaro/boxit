@@ -9,7 +9,7 @@ QString CryptSHA256::sha256CheckSum(QString filePath) {
     unsigned char buf[1000];
     unsigned char sha256sum[32];
 
-    if(!(f = fopen(filePath.toAscii().data(), "rb")))
+    if(!(f = fopen(filePath.toUtf8().data(), "rb")))
         return QString("");
 
     sha256_starts( &ctx );

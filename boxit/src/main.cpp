@@ -150,7 +150,7 @@ bool snapshotBranch();
 
 
 // Auto completion
-const char* cmd[] = { "www.manjaro.org", "manjaro.org" };
+const char* cmd[] = { "www.repo.manjaro.org", "manjaro.org", "repo.manjaro.org" };
 
 
 // Variables
@@ -567,7 +567,7 @@ bool connectAndLoginToHost(QString host) {
 
 
     // First send our boxit version to the server
-    boxitSocket.sendData(MSG_CHECK_VERSION, QByteArray(QString::number((int)BOXIT_VERSION).toAscii()));
+    boxitSocket.sendData(MSG_CHECK_VERSION, QByteArray(QString::number((int)BOXIT_VERSION).toUtf8()));
     boxitSocket.readData(msgID);
     if (msgID != MSG_SUCCESS) {
         cerr << "error: the BoxIt server is running a different version! Abording..." << endl;
@@ -580,7 +580,7 @@ bool connectAndLoginToHost(QString host) {
         username = getInput(" username: ", false, false);
         QString password = QString(QCryptographicHash::hash(getInput(" password: ", true, false).toLocal8Bit(), QCryptographicHash::Sha1).toHex());
 
-        boxitSocket.sendData(MSG_AUTHENTICATE, QByteArray(QString(username + BOXIT_SPLIT_CHAR + password).toAscii()));
+        boxitSocket.sendData(MSG_AUTHENTICATE, QByteArray(QString(username + BOXIT_SPLIT_CHAR + password).toUtf8()));
         boxitSocket.readData(msgID);
 
         if (msgID == MSG_SUCCESS) {
@@ -993,7 +993,7 @@ bool fillBranchRepos(Branch & branch, bool withPackages) {
     else
         msgID = MSG_GET_REPOS;
 
-    boxitSocket.sendData(msgID, QByteArray(branch.name.toAscii()));
+    boxitSocket.sendData(msgID, QByteArray(branch.name.toUtf8()));
     boxitSocket.readData(msgID, data);
 
     while (msgID == MSG_DATA_REPO || msgID == MSG_DATA_OVERLAY_PACKAGES || msgID == MSG_DATA_SYNC_PACKAGES) {
@@ -1379,7 +1379,7 @@ bool pushBranch() {
 
 
     // Check if virtual packages exists on server
-    boxitSocket.sendData(MSG_POOL_CHECK_FILES_EXISTS, QByteArray(addVirtualPackages.join(BOXIT_SPLIT_CHAR).toAscii()));
+    boxitSocket.sendData(MSG_POOL_CHECK_FILES_EXISTS, QByteArray(addVirtualPackages.join(BOXIT_SPLIT_CHAR).toUtf8()));
     boxitSocket.readData(msgID, data);
 
     if (msgID != MSG_SUCCESS) {
@@ -1400,7 +1400,7 @@ bool pushBranch() {
         QStringList list;
         list << branch.name << localRepo->name << localRepo->architecture;
 
-        boxitSocket.sendData(MSG_LOCK_REPO, QByteArray(list.join(BOXIT_SPLIT_CHAR).toAscii()));
+        boxitSocket.sendData(MSG_LOCK_REPO, QByteArray(list.join(BOXIT_SPLIT_CHAR).toUtf8()));
         boxitSocket.readData(msgID);
 
         if (msgID != MSG_SUCCESS) {
@@ -1412,7 +1412,7 @@ bool pushBranch() {
 
 
     // Lock pool files
-    boxitSocket.sendData(MSG_LOCK_POOL_FILES, QByteArray(addFiles.join(BOXIT_SPLIT_CHAR).toAscii()));
+    boxitSocket.sendData(MSG_LOCK_POOL_FILES, QByteArray(addFiles.join(BOXIT_SPLIT_CHAR).toUtf8()));
     boxitSocket.readData(msgID);
 
     if (msgID != MSG_SUCCESS) {
@@ -1465,7 +1465,7 @@ bool pushBranch() {
         sendData += "\n" + localRepo->addPackages.join(BOXIT_SPLIT_CHAR);
         sendData += "\n" + localRepo->removePackages.join(BOXIT_SPLIT_CHAR);
 
-        boxitSocket.sendData(MSG_APPLY_REPO_CHANGES, QByteArray(sendData.toAscii()));
+        boxitSocket.sendData(MSG_APPLY_REPO_CHANGES, QByteArray(sendData.toUtf8()));
         boxitSocket.readData(msgID);
 
         if (msgID != MSG_SUCCESS) {
@@ -1925,7 +1925,7 @@ bool uploadData(const QString path, const int currentIndex, const int maxIndex) 
     }
 
 
-    boxitSocket.sendData(MSG_FILE_UPLOAD, QByteArray(uploadFileName.toAscii()));
+    boxitSocket.sendData(MSG_FILE_UPLOAD, QByteArray(uploadFileName.toUtf8()));
     boxitSocket.readData(msgID);
 
     if (msgID == MSG_FILE_ALREADY_EXISTS) {
@@ -2225,7 +2225,7 @@ bool syncBranch() {
     // Send sync request
     cout << ":: Synchronizing branch '" << branchName.toUtf8().data() << "'" << endl;
 
-    boxitSocket.sendData(MSG_SYNC_BRANCH, QByteArray(branchName.toAscii()));
+    boxitSocket.sendData(MSG_SYNC_BRANCH, QByteArray(branchName.toUtf8()));
     boxitSocket.readData(msgID);
 
     if (msgID == MSG_IS_LOCKED) {
@@ -2251,7 +2251,7 @@ bool syncBranch() {
 
 bool changeSyncUrlOnRequest(const QString branchName) {
     // Get current sync url of branch
-    boxitSocket.sendData(MSG_GET_BRANCH_URL, QByteArray(branchName.toAscii()));
+    boxitSocket.sendData(MSG_GET_BRANCH_URL, QByteArray(branchName.toUtf8()));
     boxitSocket.readData(msgID, data);
 
     if (msgID != MSG_SUCCESS) {
@@ -2282,7 +2282,7 @@ bool changeSyncUrlOnRequest(const QString branchName) {
     }
 
     // Set new url
-    boxitSocket.sendData(MSG_SET_BRANCH_URL, QByteArray(QString(branchName + BOXIT_SPLIT_CHAR + input).toAscii()));
+    boxitSocket.sendData(MSG_SET_BRANCH_URL, QByteArray(QString(branchName + BOXIT_SPLIT_CHAR + input).toUtf8()));
     boxitSocket.readData(msgID);
 
     if (msgID != MSG_SUCCESS) {
@@ -2296,7 +2296,7 @@ bool changeSyncUrlOnRequest(const QString branchName) {
 
 
 bool changeSyncExcludeFiles(const QString branchName) {
-    boxitSocket.sendData(MSG_GET_BRANCH_SYNC_EXCLUDE_FILES, QByteArray(QString(branchName).toAscii()));
+    boxitSocket.sendData(MSG_GET_BRANCH_SYNC_EXCLUDE_FILES, QByteArray(QString(branchName).toUtf8()));
     boxitSocket.readData(msgID, data);
 
     if (msgID != MSG_SUCCESS) {
@@ -2307,7 +2307,7 @@ bool changeSyncExcludeFiles(const QString branchName) {
     // Write content to temporary file to edit it
     QFile file(QString(BOXIT_TMP_PATH) + "/.boxit-" + QString::number(qrand()));
     if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
-        cerr << "error: failed to create file '" << file.fileName().toAscii().data() << "'!" << endl;
+        cerr << "error: failed to create file '" << file.fileName().toUtf8().data() << "'!" << endl;
         return false;
     }
 
@@ -2370,7 +2370,7 @@ bool changeSyncExcludeFiles(const QString branchName) {
     }
 
     // Upload new exclude list
-    boxitSocket.sendData(MSG_SET_BRANCH_SYNC_EXCLUDE_FILES, QByteArray(QString(branchName + BOXIT_SPLIT_CHAR + content).toAscii()));
+    boxitSocket.sendData(MSG_SET_BRANCH_SYNC_EXCLUDE_FILES, QByteArray(QString(branchName + BOXIT_SPLIT_CHAR + content).toUtf8()));
     boxitSocket.readData(msgID);
 
     if (msgID != MSG_SUCCESS) {
@@ -2411,7 +2411,7 @@ bool changePassword() {
     oldPasswd = QString(QCryptographicHash::hash(oldPasswd.toLocal8Bit(), QCryptographicHash::Sha1).toHex());
     newPasswd = QString(QCryptographicHash::hash(newPasswd.toLocal8Bit(), QCryptographicHash::Sha1).toHex());
 
-    boxitSocket.sendData(MSG_SET_PASSWD, QByteArray(QString(oldPasswd + BOXIT_SPLIT_CHAR + newPasswd).toAscii()));
+    boxitSocket.sendData(MSG_SET_PASSWD, QByteArray(QString(oldPasswd + BOXIT_SPLIT_CHAR + newPasswd).toUtf8()));
     boxitSocket.readData(msgID);
 
     if (msgID == MSG_ERROR_WRONG_PASSWORD) {
@@ -2495,7 +2495,7 @@ bool snapshotBranch() {
 
 
     // Send snap request
-    boxitSocket.sendData(MSG_SNAP_BRANCH, QByteArray(QString(sourceBranchName + BOXIT_SPLIT_CHAR + destBranchName).toAscii()));
+    boxitSocket.sendData(MSG_SNAP_BRANCH, QByteArray(QString(sourceBranchName + BOXIT_SPLIT_CHAR + destBranchName).toUtf8()));
     boxitSocket.readData(msgID);
 
     if (msgID == MSG_IS_LOCKED) {

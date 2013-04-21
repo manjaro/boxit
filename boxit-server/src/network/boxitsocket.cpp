@@ -142,7 +142,7 @@ void BoxitSocket::socketError() {
     if (error() == QAbstractSocket::RemoteHostClosedError)
         return;
 
-    cerr << errorString().toAscii().data() << endl;
+    cerr << errorString().toUtf8().data() << endl;
 }
 
 
@@ -160,7 +160,7 @@ void BoxitSocket::sslErrors(const QList<QSslError> &errors) {
              first = false;
         }
 
-        cerr << error.errorString().toAscii().data() << endl;
+        cerr << error.errorString().toUtf8().data() << endl;
     }
 }
 

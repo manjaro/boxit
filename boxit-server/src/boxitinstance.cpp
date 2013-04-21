@@ -140,7 +140,7 @@ void BoxitInstance::read_Data(quint16 msgID, QByteArray data) {
         QStringList branches = Database::getBranches();
 
         foreach (QString branch, branches) {
-            sendData(MSG_DATA_BRANCH, QByteArray(branch.toAscii()));
+            sendData(MSG_DATA_BRANCH, QByteArray(branch.toUtf8()));
         }
 
         sendData(MSG_SUCCESS);
@@ -165,7 +165,7 @@ void BoxitInstance::read_Data(quint16 msgID, QByteArray data) {
             str += BOXIT_SPLIT_CHAR + repo->state;
             str += BOXIT_SPLIT_CHAR + QString::number((int)repo->isSyncRepo);
 
-            sendData(MSG_DATA_REPO, QByteArray(str.toAscii()));
+            sendData(MSG_DATA_REPO, QByteArray(str.toUtf8()));
 
             if (msgID == MSG_GET_REPOS_WITH_PACKAGES) {
                 // Send all overlay packages
@@ -184,7 +184,7 @@ void BoxitInstance::read_Data(quint16 msgID, QByteArray data) {
         QStringList missingFiles;
 
         if (!Database::checkPoolFilesExists(QString(data).split(BOXIT_SPLIT_CHAR, QString::SkipEmptyParts), missingFiles))
-            sendData(MSG_ERROR, QByteArray(missingFiles.join(BOXIT_SPLIT_CHAR).toAscii()));
+            sendData(MSG_ERROR, QByteArray(missingFiles.join(BOXIT_SPLIT_CHAR).toUtf8()));
         else
             sendData(MSG_SUCCESS);
 
@@ -307,7 +307,7 @@ void BoxitInstance::read_Data(quint16 msgID, QByteArray data) {
             break;
         }
 
-        sendData(MSG_SUCCESS, QByteArray(url.toAscii()));
+        sendData(MSG_SUCCESS, QByteArray(url.toUtf8()));
         break;
     }
     case MSG_SET_BRANCH_URL:
@@ -335,7 +335,7 @@ void BoxitInstance::read_Data(quint16 msgID, QByteArray data) {
             break;
         }
 
-        sendData(MSG_SUCCESS, QByteArray(excludeFiles.toAscii()));
+        sendData(MSG_SUCCESS, QByteArray(excludeFiles.toUtf8()));
         break;
     }
     case MSG_SET_BRANCH_SYNC_EXCLUDE_FILES:
@@ -515,7 +515,7 @@ void BoxitInstance::sendStringList(const quint16 msgID, const QStringList & list
         else {
             count = 0;
             data.append(item);
-            sendData(msgID, QByteArray(data.toAscii()));
+            sendData(msgID, QByteArray(data.toUtf8()));
             data.clear();
         }
     }
@@ -524,7 +524,7 @@ void BoxitInstance::sendStringList(const quint16 msgID, const QStringList & list
         if (data.endsWith(BOXIT_SPLIT_CHAR))
             data.remove(data.size() - 1, 1);
 
-        sendData(msgID, QByteArray(data.toAscii()));
+        sendData(msgID, QByteArray(data.toUtf8()));
     }
 }
 
@@ -551,7 +551,7 @@ void BoxitInstance::sendStatus() {
         list << QString::number((int)(branch->state == Status::STATE_FAILED));
         list << branch->error;
 
-        sendData(MSG_DATA_BRANCH_STATUS, QByteArray(list.join(BOXIT_SPLIT_CHAR).toAscii()));
+        sendData(MSG_DATA_BRANCH_STATUS, QByteArray(list.join(BOXIT_SPLIT_CHAR).toUtf8()));
     }
 
     // Send repo status
@@ -566,7 +566,7 @@ void BoxitInstance::sendStatus() {
         list << QString::number((int)(repo->state == Status::STATE_FAILED));
         list << repo->error;
 
-        sendData(MSG_DATA_REPO_STATUS, QByteArray(list.join(BOXIT_SPLIT_CHAR).toAscii()));
+        sendData(MSG_DATA_REPO_STATUS, QByteArray(list.join(BOXIT_SPLIT_CHAR).toUtf8()));
     }
 
     sendData(MSG_DATA_END_STATUS_LIST);

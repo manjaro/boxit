@@ -73,7 +73,7 @@ bool Global::fixFilePermission(QString file) {
 
     // Set right permission
     mode_t process_mask = umask(0);
-    ret = chmod(file.toAscii().data(), S_IRUSR | S_IWUSR | S_IXUSR | S_IRGRP | S_IROTH | S_IXGRP | S_IXOTH);
+    ret = chmod(file.toUtf8().data(), S_IRUSR | S_IWUSR | S_IXUSR | S_IRGRP | S_IROTH | S_IXGRP | S_IXOTH);
     umask(process_mask);
 
     return (ret == 0);
@@ -126,7 +126,7 @@ bool Global::sendEMail(QString subject, QString to, QString text, QStringList at
 
     QStringList lines = text.split("\n", QString::KeepEmptyParts);
     for (int i = 0; i < lines.size(); ++i) {
-        process.write(QString(lines.at(i) + "\n").toAscii());
+        process.write(QString(lines.at(i) + "\n").toUtf8());
     }
 
     process.closeWriteChannel();

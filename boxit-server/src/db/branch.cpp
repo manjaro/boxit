@@ -65,7 +65,7 @@ bool Branch::init() {
             Repo *repo = new Repo(name, repoName, architecture, repoPath);
 
             if (!repo->init()) {
-                cerr << "warning: failed to init repo '" << repoPath.toAscii().data() << "'!" << endl;
+                cerr << "warning: failed to init repo '" << repoPath.toUtf8().data() << "'!" << endl;
                 delete (repo);
                 continue;
             }

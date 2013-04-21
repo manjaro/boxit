@@ -326,7 +326,7 @@ bool Database::moveFilesToPool(const int sessionID, const QString path, QStringL
             Global::fixFilePermission(poolDir + "/" + file);
         }
         else {
-            qDebug(file.toAscii());
+            qDebug(file.toUtf8());
             success = false;
         }
     }
