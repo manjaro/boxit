@@ -46,7 +46,7 @@ BoxitSocket::BoxitSocket(int sessionID, QObject *parent) :
 
 void BoxitSocket::readyReadData() {
     QDataStream in(this);
-    in.setVersion(QDataStream::Qt_4_8);
+    in.setVersion(QDataStream::Qt_4_6);
 
 
     if (readBlockSize == 0) {
@@ -113,7 +113,7 @@ void BoxitSocket::sendData(quint16 msgID, QByteArray data) {
         // Send data
         QByteArray block;
         QDataStream out(&block, QIODevice::WriteOnly);
-        out.setVersion(QDataStream::Qt_4_0);
+        out.setVersion(QDataStream::Qt_4_6);
         out << (quint16)0;
         out << (quint16)subMsgID;
         out << subData;
