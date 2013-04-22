@@ -39,6 +39,9 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QMap>
+#include <QProcess>
+#include <dbusclient.h>
+
 #include "boxitsocket.h"
 #include "const.h"
 #include "version.h"
@@ -99,6 +102,7 @@ QString getNameofPKG(QString pkg);
 Version getVersionofPKG(QString pkg);
 QString getArchofPKG(QString pkg);
 QByteArray sha1CheckSum(QString filePath);
+bool startKeyringServiceIfRequired();
 
 // Input
 void consoleEchoMode(bool on = true);
@@ -112,13 +116,14 @@ char * dupstr (char*);
 void * xmalloc (int);
 
 // General socket operations
-bool connectAndLoginToHost(QString host);
-bool connectIfRequired(QString & host);
+bool connectAndLoginToHost(QString & host);
+bool connectToHost(DBusClient & dbus, const QString host);
+bool sendAuthentification(DBusClient & dbus, const QString username, const QString password);
 void resetServerTimeout();
 
 // Branch & Repo operations
 bool createBranch();
-bool initBranch(const QString path);
+bool initBranch(QString path);
 bool initRepo(Repo *repo);
 bool readPackagesConfig(const QString path, QStringList & packages);
 bool writePackagesConfig(const QString path, const QStringList & packages);
@@ -427,6 +432,30 @@ QByteArray sha1CheckSum(QString filePath) {
 
 
 
+bool startKeyringServiceIfRequired() {
+    DBusClient dbus;
+
+    if (dbus.isValid())
+        return true;
+
+    // Start service
+    if (!QProcess::startDetached("boxit-keyring"))
+        return false;
+
+    // Wait for service to start
+    for (int i = 0; i < 200; ++i) {
+        usleep(10000);
+
+        DBusClient dbus;
+        if (dbus.isValid())
+            return true;
+    }
+
+    return false;
+}
+
+
+
 //###
 //### Input
 //###
@@ -554,16 +583,87 @@ void * xmalloc (int size)
 //###
 
 
-bool connectAndLoginToHost(QString host) {
+bool connectAndLoginToHost(QString & host) {
+    // Check if already connected
+    if (boxitSocket.state() == QAbstractSocket::ConnectedState)
+        return true;
+
+    if (!startKeyringServiceIfRequired())
+        cerr << "warning: failed to start BoxIt keyring service!" << endl;
+
+    DBusClient dbus;
+
+    // Some clean up
+    username.clear();
+    host = host.trimmed();
+
+
+    // Get host if empty
+    if (host.isEmpty()) {
+        // Let's try to get the host from a previous session
+        if (dbus.isValid() && dbus.getHost(host)) {
+            QString tmpHost = getInput(QString(" host [%1]: ").arg(host), false, false);
+
+            if (!tmpHost.isEmpty())
+                host = tmpHost;
+        }
+        else {
+            host = getInput(" host: ", false, false).trimmed();
+        }
+    }
+
+    // Connect to host
+    if (!connectToHost(dbus, host))
+        return false;
+
+
+    // Try to login
+    for (int i = 0; i < 3; ++i) {
+        QString password;
+
+        // Let's try to get the username from a previous session
+        if (dbus.isValid() && dbus.getUserLogin(username, password)) {
+            QString tmpUsername = getInput(QString(" username [%1]: ").arg(username), false, false);
+
+            if (!tmpUsername.isEmpty()) {
+                username = tmpUsername;
+                password.clear();
+            }
+        }
+        else {
+            username = getInput(" username: ", false, false);
+        }
+
+        // Get password
+        if (password.isEmpty())
+            password = QString(QCryptographicHash::hash(getInput(" password: ", true, false).toLocal8Bit(), QCryptographicHash::Sha1).toHex());
+
+        // Login...
+        if (sendAuthentification(dbus, username, password))
+            return true;
+    }
+
+
+    // Disconnect from server
+    boxitSocket.disconnectFromHost();
+
+    return false;
+}
+
+
+
+bool connectToHost(DBusClient & dbus, const QString host) {
+    // Status messages
     cout << "\r" << flush;
-    cout << QString(":: Connecting to host %1...").arg(host.trimmed()).toUtf8().data() << flush;
+    cout << QString(":: Connecting to host %1...").arg(host).toUtf8().data() << flush;
 
     // Connect to host
     if (!boxitSocket.connectToHost(host))
         return false; // Error messages are printed by the boxit socket class
 
+    // Status messages
     cout << "\r" << flush;
-    cout << QString(":: Connected to host %1     ").arg(host.trimmed()).toUtf8().data() << endl;
+    cout << QString(":: Connected to host %1     ").arg(host).toUtf8().data() << endl;
 
 
     // First send our boxit version to the server
@@ -571,47 +671,36 @@ bool connectAndLoginToHost(QString host) {
     boxitSocket.readData(msgID);
     if (msgID != MSG_SUCCESS) {
         cerr << "error: the BoxIt server is running a different version! Abording..." << endl;
-        goto error;
+
+        // Disconnect from server
+        boxitSocket.disconnectFromHost();
+
+        return false;
     }
 
-
-    // Let's login now
-    for (int i=0;; i++) {
-        username = getInput(" username: ", false, false);
-        QString password = QString(QCryptographicHash::hash(getInput(" password: ", true, false).toLocal8Bit(), QCryptographicHash::Sha1).toHex());
-
-        boxitSocket.sendData(MSG_AUTHENTICATE, QByteArray(QString(username + BOXIT_SPLIT_CHAR + password).toUtf8()));
-        boxitSocket.readData(msgID);
-
-        if (msgID == MSG_SUCCESS) {
-            break;
-        }
-        else {
-            cerr << "error: failed to login!" << endl;
-            if (i>1)
-                goto error;
-        }
-    }
-
+    // Save host to keyring
+    if (!dbus.setHost(host))
+        cerr << "warning: failed to save host in the BoxIt keyring service!" << endl;
 
     return true;
-
-error:
-    // Disconnect from server
-    boxitSocket.disconnectFromHost();
-    return false;
 }
 
 
 
-bool connectIfRequired(QString & host) {
-    if (boxitSocket.state() == QAbstractSocket::ConnectedState)
-        return true;
+bool sendAuthentification(DBusClient & dbus, const QString username, const QString password) {
+    boxitSocket.sendData(MSG_AUTHENTICATE, QByteArray(QString(username + BOXIT_SPLIT_CHAR + password).toUtf8()));
+    boxitSocket.readData(msgID);
 
-    if (host.isEmpty())
-        host = getInput(" host: ", false, false).trimmed();
+    if (msgID != MSG_SUCCESS) {
+        cerr << "error: failed to login!" << endl;
+        return false;
+    }
 
-    return connectAndLoginToHost(host);
+    // Save username and password to keyring
+    if (!dbus.setUserLogin(username, password))
+        cerr << "warning: failed to save username and password in the BoxIt keyring service!" << endl;
+
+    return true;
 }
 
 
@@ -633,7 +722,7 @@ void resetServerTimeout() {
 bool createBranch() {
     QString host;
 
-    if (!connectIfRequired(host))
+    if (!connectAndLoginToHost(host))
         return false; // Error messages are printed by the method
 
     // List all available branches
@@ -700,7 +789,26 @@ bool createBranch() {
 
 
 
-bool initBranch(const QString path) {
+bool initBranch(QString path) {
+    // Find right path by checking parent directories...
+    QDir configDir(path);
+
+    do {
+        if (QDir(configDir.path() + "/" + BOXIT_DIR).exists()) {
+            path = configDir.path();
+            break;
+        }
+    } while (configDir.cdUp());
+
+
+    // Change current working directory
+    if (!QDir::setCurrent(path)) {
+        cerr << "error: failed to change current working directory!" << endl;
+        return false;
+    }
+
+
+    // Set branch values
     branch.repos.clear();
     branch.path = path;
     branch.configPath = path + "/" + BOXIT_DIR;
@@ -1039,7 +1147,7 @@ bool fillBranchRepos(Branch & branch, bool withPackages) {
 
 bool pullBranch() {
     // Check if connected...
-    if (!connectIfRequired(branch.serverURL))
+    if (!connectAndLoginToHost(branch.serverURL))
         return false; // Error messages are printed by the method
 
     cout << ":: Pulling changes..." << endl;
@@ -1338,7 +1446,7 @@ bool pushBranch() {
 
 
     // Check if connected...
-    if (!connectIfRequired(branch.serverURL))
+    if (!connectAndLoginToHost(branch.serverURL))
         return false; // Error messages are printed by the method
 
 
@@ -1992,7 +2100,7 @@ bool listenOnStatus(bool exitOnSessionEnd) {
     TimeOutReset timeOutReset(&boxitSocket);
     QString host = "";
 
-    if (!connectIfRequired(host))
+    if (!connectAndLoginToHost(host))
         return false; // Error messages are printed by the method
 
     boxitSocket.sendData(MSG_LISTEN_ON_STATUS);
@@ -2099,7 +2207,7 @@ bool listenOnStatus(bool exitOnSessionEnd) {
 
 bool printErrors() {
     QString host = "";
-    if (!connectIfRequired(host))
+    if (!connectAndLoginToHost(host))
         return false; // Error messages are printed by the method
 
     boxitSocket.sendData(MSG_LISTEN_ON_STATUS);
@@ -2177,7 +2285,7 @@ bool printErrors() {
 
 bool syncBranch() {
     QString host = "";
-    if (!connectIfRequired(host))
+    if (!connectAndLoginToHost(host))
         return false; // Error messages are printed by the method
 
     // List all available branches
@@ -2385,7 +2493,7 @@ bool changeSyncExcludeFiles(const QString branchName) {
 
 bool changePassword() {
     QString host = "";
-    if (!connectIfRequired(host))
+    if (!connectAndLoginToHost(host))
         return false; // Error messages are printed by the method
 
     cout << ":: Set new password" << endl;
@@ -2432,7 +2540,7 @@ bool changePassword() {
 
 bool snapshotBranch() {
     QString host = "";
-    if (!connectIfRequired(host))
+    if (!connectAndLoginToHost(host))
         return false; // Error messages are printed by the method
 
     // List all available branches

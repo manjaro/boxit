@@ -1,0 +1,7 @@
+Dependencies:
+
+- Qt4 or Qt5
+
+Build dependencies:
+
+- OpenSSL
