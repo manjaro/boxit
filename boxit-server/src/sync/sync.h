@@ -32,6 +32,7 @@
 #include <QProcess>
 #include <QRegExp>
 #include <iostream>
+#include <unistd.h>
 
 #include "download.h"
 #include "const.h"

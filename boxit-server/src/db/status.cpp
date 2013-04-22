@@ -293,7 +293,7 @@ void Status::commitTimeout() {
         for (int i = 0; i < it.value().size(); ++i) {
             RepoCommit *repo = it.value()[i];
 
-            message += QString(" - %1 %2 %3:\t%4 new and %5 removed package(s)\n").arg(repo->branchName, repo->name, repo->architecture,
+            message += QString(" - %1 %2 %3:  %4 new and %5 removed package(s)\n").arg(repo->branchName, repo->name, repo->architecture,
                                                                                     QString::number(repo->addPackages.size()),
                                                                                     QString::number(repo->removePackages.size()));
 
