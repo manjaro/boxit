@@ -250,12 +250,15 @@ bool Sync::downloadSyncPackages(const QList<Package> & downloadPackages) {
             }
 
             // Wait a little bit before moving the file. Otherwise sometimes the move might fail...
-            usleep(200000);
+            usleep(100000);
 
             // Move file to sync pool directory
             if (!QDir().rename(tmpPath + "/" + package->fileName, syncPath + "/" + package->fileName)) {
-                errorMessage = QString("error: failed to move file '%1' to sync folder!").arg(package->fileName);
-                return false;
+                // Try to copy it on error
+                if (!QFile::copy(tmpPath + "/" + package->fileName, syncPath + "/" + package->fileName)) {
+                    errorMessage = QString("error: failed to copy file '%1' to sync folder!").arg(package->fileName);
+                    return false;
+                }
             }
 
             // Fix file permission
@@ -270,12 +273,15 @@ bool Sync::downloadSyncPackages(const QList<Package> & downloadPackages) {
             }
 
             // Wait a little bit before moving the file. Otherwise sometimes the move might fail...
-            usleep(200000);
+            usleep(100000);
 
             // Move file to sync pool directory
             if (!QDir().rename(tmpPath + "/" + package->fileName + BOXIT_SIGNATURE_ENDING, syncPath + "/" + package->fileName + BOXIT_SIGNATURE_ENDING)) {
-                errorMessage = QString("error: failed to move file '%1' to sync folder!").arg(package->fileName + BOXIT_SIGNATURE_ENDING);
-                return false;
+                // Try to copy it on error
+                if (!QFile::copy(tmpPath + "/" + package->fileName + BOXIT_SIGNATURE_ENDING, syncPath + "/" + package->fileName + BOXIT_SIGNATURE_ENDING)) {
+                    errorMessage = QString("error: failed to copy file '%1' to sync folder!").arg(package->fileName + BOXIT_SIGNATURE_ENDING);
+                    return false;
+                }
             }
 
             // Fix file permission
