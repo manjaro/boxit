@@ -249,9 +249,6 @@ bool Sync::downloadSyncPackages(const QList<Package> & downloadPackages) {
                 return false;
             }
 
-            // Wait a little bit before moving the file. Otherwise sometimes the move might fail...
-            usleep(100000);
-
             // Move file to sync pool directory
             if (!QDir().rename(tmpPath + "/" + package->fileName, syncPath + "/" + package->fileName)) {
                 // Try to copy it on error
@@ -271,9 +268,6 @@ bool Sync::downloadSyncPackages(const QList<Package> & downloadPackages) {
                 errorMessage = QString("error: failed to download signature of package '%1'!").arg(package->fileName);
                 return false;
             }
-
-            // Wait a little bit before moving the file. Otherwise sometimes the move might fail...
-            usleep(100000);
 
             // Move file to sync pool directory
             if (!QDir().rename(tmpPath + "/" + package->fileName + BOXIT_SIGNATURE_ENDING, syncPath + "/" + package->fileName + BOXIT_SIGNATURE_ENDING)) {
