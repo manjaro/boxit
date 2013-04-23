@@ -68,20 +68,7 @@ QString Global::getVersionofPKG(QString pkg) {
 
 
 
-bool Global::fixFilePermission(QString file) {
-    int ret;
-
-    // Set right permission
-    mode_t process_mask = umask(0);
-    ret = chmod(file.toUtf8().data(), S_IRUSR | S_IWUSR | S_IXUSR | S_IRGRP | S_IROTH | S_IXGRP | S_IXOTH);
-    umask(process_mask);
-
-    return (ret == 0);
-}
-
-
-
-QByteArray Global::sha1CheckSum(QString filePath) {
+QByteArray Global::sha1CheckSum(const QString filePath) {
     QCryptographicHash crypto(QCryptographicHash::Sha1);
     QFile file(filePath);
 
@@ -97,7 +84,7 @@ QByteArray Global::sha1CheckSum(QString filePath) {
 
 
 
-bool Global::sendMemoEMail(QString mailMessage, QStringList attachments) {
+bool Global::sendMemoEMail(const QString mailMessage, const QStringList attachments) {
     // Send e-mail message to mailing lists
     bool ret = true;
 
@@ -111,7 +98,7 @@ bool Global::sendMemoEMail(QString mailMessage, QStringList attachments) {
 
 
 
-bool Global::sendEMail(QString subject, QString to, QString text, QStringList attachments) {
+bool Global::sendEMail(const QString subject, const QString to, const QString text, const QStringList attachments) {
     QStringList args;
 
     foreach (QString attachment, attachments)
@@ -141,7 +128,7 @@ bool Global::sendEMail(QString subject, QString to, QString text, QStringList at
 
 
 
-bool Global::rmDir(QString path, bool onlyHidden, bool onlyContent) {
+bool Global::rmDir(const QString path, const bool onlyHidden, const bool onlyContent) {
     if (!QDir().exists(path))
         return true;
 
@@ -150,18 +137,18 @@ bool Global::rmDir(QString path, bool onlyHidden, bool onlyContent) {
     // Remove content of dir
     QStringList list = QDir(path).entryList(QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden | QDir::System, QDir::Name);
 
-    for (int i = 0; i < list.size(); ++i) {
-        if (onlyHidden && !list.at(i).trimmed().startsWith("."))
+    foreach (const QString file, list) {
+        if (onlyHidden && !file.trimmed().startsWith("."))
             continue;
 
-        QFileInfo info(path + "/" + list.at(i));
+        QFileInfo info(path + "/" + file);
 
         if (info.isDir()) {
-            if (!rmDir(path + "/" + list.at(i)), onlyHidden)
+            if (!rmDir(path + "/" + file), onlyHidden)
                 success = false;
         }
         else {
-            if (!QFile::remove(path + "/" + list.at(i)))
+            if (!QFile::remove(path + "/" + file))
                 success = false;
         }
     }
@@ -174,13 +161,19 @@ bool Global::rmDir(QString path, bool onlyHidden, bool onlyContent) {
 
 
 
-bool Global::copyDir(QString src, QString dst, bool hidden) {
+bool Global::copyDir(const QString src, const QString dst, const bool hidden) {
     if (!QDir().exists(src))
         return false;
+
     if (QDir().exists(dst))
         rmDir(dst);
+
     if (!QDir().mkpath(dst))
         return false;
+
+    // Keep same folder permission
+    preserveDirectoryPermission(src, dst); // Error isn't critical
+
 
     bool success = true;
 
@@ -193,20 +186,73 @@ bool Global::copyDir(QString src, QString dst, bool hidden) {
         list = QDir(src).entryList(QDir::AllEntries | QDir::NoDotAndDotDot | QDir::System, QDir::Name);
 
 
-    for (int i = 0; i < list.size(); ++i) {
-        QFileInfo info(src + "/" + list.at(i));
+    foreach (const QString file, list) {
+        QFileInfo info(src + "/" + file);
 
         if (info.isDir()) {
-            if (!copyDir(src + "/" + list.at(i), dst + "/" + list.at(i), hidden))
+            if (!copyDir(src + "/" + file, dst + "/" + file, hidden))
+                success = false;
+        }
+        else if (info.isSymLink()) {
+            QString symlinkTarget = getSymlinkTarget(src + "/" + file);
+
+            if (symlinkTarget.isEmpty() || !QFile::link(symlinkTarget, dst + "/" + file))
                 success = false;
         }
         else {
-            if (!QFile::copy(src + "/" + list.at(i), dst + "/" + list.at(i)))
+            if (!QFile::copy(src + "/" + file, dst + "/" + file))
                 success = false;
         }
     }
 
     return success;
+}
+
+
+
+QString Global::getSymlinkTarget(const QString symlink) {
+    char buf[1024];
+    ssize_t len;
+
+    if ((len = readlink(symlink.toStdString().c_str(), buf, sizeof(buf) - 1)) != -1) {
+        buf[len] = '\0';
+        return QString::fromLatin1(buf);
+    }
+
+    return "";
+}
+
+
+
+bool Global::fixFilePermission(const QString file) {
+    return setFilePermission(file, S_IRUSR | S_IWUSR | S_IXUSR | S_IRGRP | S_IROTH | S_IXGRP | S_IXOTH);
+}
+
+
+
+bool Global::setFilePermission(const QString file, const mode_t mode) {
+    int ret;
+
+    // Set right permission
+    mode_t process_mask = umask(0);
+    ret = chmod(file.toStdString().c_str(), mode);
+    umask(process_mask);
+
+    return (ret == 0);
+}
+
+
+
+bool Global::preserveDirectoryPermission(const QString srcDir, const QString destDir) {
+    if (!QDir(srcDir).exists())
+        return false;
+
+    // Get source folder permission
+    struct stat srcStat;
+    stat(srcDir.toStdString().c_str(), &srcStat);
+
+    // Set destination folder permission
+    return setFilePermission(destDir, srcStat.st_mode);
 }
 
 

@@ -34,6 +34,7 @@
 #include <QCryptographicHash>
 #include <QMutex>
 #include <QMutexLocker>
+#include <unistd.h>
 #include "const.h"
 #include <sys/stat.h>
 
@@ -50,12 +51,15 @@ public:
     static int getNewUniqueSessionID();
     static QString getNameofPKG(QString pkg);
     static QString getVersionofPKG(QString pkg);
-    static bool fixFilePermission(QString file);
-    static QByteArray sha1CheckSum(QString filePath);
-    static bool sendMemoEMail(QString mailMessage, QStringList attachments);
-    static bool sendEMail(QString subject, QString to, QString text, QStringList attachments);
-    static bool rmDir(QString path, bool onlyHidden = false, bool onlyContent = false);
-    static bool copyDir(QString src, QString dst, bool hidden = false);
+    static QByteArray sha1CheckSum(const QString filePath);
+    static bool sendMemoEMail(const QString mailMessage, const QStringList attachments);
+    static bool sendEMail(const QString subject, const QString to, const QString text, const QStringList attachments);
+    static bool rmDir(const QString path, const bool onlyHidden = false, const bool onlyContent = false);
+    static bool copyDir(const QString src, const QString dst, const bool hidden = false);
+    static QString getSymlinkTarget(const QString symlink);
+    static bool fixFilePermission(const QString file);
+    static bool setFilePermission(const QString file, const mode_t mode);
+    static bool preserveDirectoryPermission(const QString srcDir, const QString destDir);
     static Config getConfig();
     static bool readConfig();
 
