@@ -229,10 +229,14 @@ error:
 
 bool Sync::downloadSyncPackages(const QList<Package> & downloadPackages) {
     const QString syncPath = Global::getConfig().syncPoolDir;
+    QStringList syncFiles;
+    bool success = true;
+
 
     // Download each file
     for (int i = 0; i < downloadPackages.size(); ++i) {
         const Package *package = &downloadPackages.at(i);
+        QStringList addSyncFiles;
 
         // Update status
         emit status(i + 1, downloadPackages.size());
@@ -240,50 +244,66 @@ bool Sync::downloadSyncPackages(const QList<Package> & downloadPackages) {
 
         // Download file...
         if (package->downloadPackage) {
-            if (!downloadFile(package->url + package->fileName))
-                return false;
+            if (!downloadFile(package->url + package->fileName)) {
+                errorMessage = QString("error: failed to download package '%1'!").arg(package->fileName);
+                success = false;
+                break;
+            }
 
             // Check if package checksum is ok
             if (CryptSHA256::sha256CheckSum(tmpPath + "/" + package->fileName) != package->sha256sum) {
                 errorMessage = QString("error: package checksum doesn't match for package '%1'!").arg(package->fileName);
-                return false;
+                success = false;
+                break;
             }
 
-            // Move file to sync pool directory
-            if (!QDir().rename(tmpPath + "/" + package->fileName, syncPath + "/" + package->fileName)) {
-                // Try to copy it on error
-                if (!QFile::copy(tmpPath + "/" + package->fileName, syncPath + "/" + package->fileName)) {
-                    errorMessage = QString("error: failed to copy file '%1' to sync folder!").arg(package->fileName);
-                    return false;
-                }
-            }
+            // Fix file permission to be sure on move/copy that it has the right permission from beginning
+            Global::fixFilePermission(tmpPath + "/" + package->fileName);
 
-            // Fix file permission
-            Global::fixFilePermission(syncPath + "/" + package->fileName);
+            // Add to temporary list
+            addSyncFiles.append(package->fileName);
         }
 
         // Download signature file...
         if (package->downloadSignature) {
             if (!downloadFile(package->url + package->fileName + BOXIT_SIGNATURE_ENDING)) {
                 errorMessage = QString("error: failed to download signature of package '%1'!").arg(package->fileName);
-                return false;
+                success = false;
+                break;
             }
 
-            // Move file to sync pool directory
-            if (!QDir().rename(tmpPath + "/" + package->fileName + BOXIT_SIGNATURE_ENDING, syncPath + "/" + package->fileName + BOXIT_SIGNATURE_ENDING)) {
-                // Try to copy it on error
-                if (!QFile::copy(tmpPath + "/" + package->fileName + BOXIT_SIGNATURE_ENDING, syncPath + "/" + package->fileName + BOXIT_SIGNATURE_ENDING)) {
-                    errorMessage = QString("error: failed to copy file '%1' to sync folder!").arg(package->fileName + BOXIT_SIGNATURE_ENDING);
-                    return false;
-                }
-            }
+            // Fix file permission to be sure on move/copy that it has the right permission from beginning
+            Global::fixFilePermission(tmpPath + "/" + package->fileName + BOXIT_SIGNATURE_ENDING);
 
-            // Fix file permission
-            Global::fixFilePermission(syncPath + "/" + package->fileName + BOXIT_SIGNATURE_ENDING);
+            // Add to temporary list
+            addSyncFiles.append(package->fileName + BOXIT_SIGNATURE_ENDING);
         }
+
+        // Finally add to real list if no error occurred
+        syncFiles.append(addSyncFiles);
     }
 
-    return true;
+
+    // Update status
+    Status::setBranchStateChanged(branch->name, "moving synchronization packages...", "", Status::STATE_RUNNING);
+
+    // Now move files to final destination
+    foreach (const QString file, syncFiles) {
+        // Move file to sync pool directory
+        if (!QDir().rename(tmpPath + "/" + file, syncPath + "/" + file)) {
+            // Try to copy it on error. Move fails if source and destination folder are not on the same partition...
+            if (!QFile::copy(tmpPath + "/" + file, syncPath + "/" + file)) {
+                errorMessage = QString("error: failed to copy file '%1' to sync folder!").arg(file);
+                return false;
+            }
+        }
+
+        // Fix file permission
+        Global::fixFilePermission(syncPath + "/" + file);
+    }
+
+
+    return success;
 }
 
 
@@ -355,7 +375,7 @@ void Sync::cleanupTmpDir() {
 
 
 
-bool Sync::downloadFile(QString url) {
+bool Sync::downloadFile(const QString url) {
     Download download(tmpPath);
     QEventLoop eventLoop;
     QObject::connect(&download, SIGNAL(finished(bool)), &eventLoop, SLOT(quit()));
