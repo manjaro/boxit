@@ -284,6 +284,12 @@ bool Sync::downloadSyncPackages(const QList<Package> & downloadPackages) {
     }
 
 
+    // Just sleep a moment to ensure all files descriptors are closed -> Move/Copy bug
+    for (int i = 0; i < 100; ++i) {
+        usleep(10000);
+    }
+
+
     // Update status
     Status::setBranchStateChanged(branch->name, "moving synchronization packages...", "", Status::STATE_RUNNING);
 
