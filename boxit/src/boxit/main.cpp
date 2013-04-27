@@ -1601,7 +1601,7 @@ bool pushBranch() {
     }
 
     cout << endl << ":: Process session successfully finished." << endl;
-    sleep(1);
+    sleep(3);
 
     // Pull changes
     if (!pullBranch())

@@ -70,6 +70,7 @@ private:
 
 
     Branch *branch;
+    Download download;
     const QString tmpPath;
     int sessionID;
     QString errorMessage;

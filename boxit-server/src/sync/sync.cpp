@@ -284,14 +284,15 @@ bool Sync::downloadSyncPackages(const QList<Package> & downloadPackages) {
     }
 
 
+    // Update status
+    Status::setBranchStateChanged(branch->name, "moving synchronization packages...", "", Status::STATE_RUNNING);
+
+
     // Just sleep a moment to ensure all files descriptors are closed -> Move/Copy bug
     for (int i = 0; i < 100; ++i) {
         usleep(10000);
     }
 
-
-    // Update status
-    Status::setBranchStateChanged(branch->name, "moving synchronization packages...", "", Status::STATE_RUNNING);
 
     // Now move files to final destination
     foreach (const QString file, syncFiles) {
@@ -382,11 +383,10 @@ void Sync::cleanupTmpDir() {
 
 
 bool Sync::downloadFile(const QString url) {
-    Download download(tmpPath);
     QEventLoop eventLoop;
     QObject::connect(&download, SIGNAL(finished(bool)), &eventLoop, SLOT(quit()));
 
-    if (!download.download(url)) {
+    if (!download.download(url, tmpPath)) {
         errorMessage = "error: failed to download file '" + url + "'!";
         return false;
     }

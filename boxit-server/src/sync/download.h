@@ -23,11 +23,13 @@
 
 #include <QObject>
 #include <QString>
+#include <QByteArray>
 #include <QNetworkAccessManager>
+#include <QNetworkRequest>
 #include <QNetworkReply>
 #include <QFile>
-#include <QUrl>
 #include <QFileInfo>
+#include <QUrl>
 
 
 #define RETRYATTEMPTS 1
@@ -37,12 +39,12 @@ class Download : public QObject
 {
     Q_OBJECT
 public:
-    explicit Download(const QString destPath, QObject *parent = 0);
+    explicit Download(QObject *parent = 0);
     ~Download();
 
-    bool download(const QString url, bool keepAttempts = false);
-    bool isActive();
+    bool download(const QString url, const QString destPath);
     void cancel();
+    bool isActive();
     QString lastError();
     bool hasError();
 
@@ -50,16 +52,17 @@ signals:
     void finished(bool success);
 
 private:
-    const QString destPath;
-    bool busy, error;
-    int attempts;
     QNetworkAccessManager manager;
     QNetworkReply *reply;
+    QString destPath, errorStr, url;
     QFile file;
-    QString errorStr, url;
+    int attempts;
+    bool isRunning, error;
+
+    bool _download(const QString url);
 
 private slots:
-    void finishedDownload();
+    void fileDownloaded(QNetworkReply *reply);
     void readyRead();
     void downloadProgress(qint64,qint64);
 

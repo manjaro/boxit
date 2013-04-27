@@ -20,14 +20,14 @@
 
 #include "download.h"
 
-Download::Download(const QString destPath, QObject *parent) :
-    QObject(parent),
-    destPath(destPath)
+Download::Download(QObject *parent) :
+    QObject(parent)
 {
-    busy = false;
-    error = false;
-    attempts = 0;
+    isRunning = false;
     reply = NULL;
+
+    // Connect signals and slots
+    connect(&manager, SIGNAL(finished(QNetworkReply*))    ,   SLOT(fileDownloaded(QNetworkReply*)));
 }
 
 
@@ -38,69 +38,8 @@ Download::~Download() {
 
 
 
-bool Download::download(const QString url, bool keepAttempts) {
-    if (busy)
-        return false;
-
-    if (file.isOpen()) {
-        file.close();
-        file.remove();
-    }
-
-    this->url = url;
-    file.setFileName(destPath + "/" + QFileInfo(QUrl(url).path()).fileName());
-
-    if (file.fileName().isEmpty()
-            || (file.exists() && !file.remove())
-            || !file.open(QIODevice::WriteOnly))
-        return false;
-
-
-    if (!keepAttempts)
-        attempts = 0;
-
-    errorStr.clear();
-    error = false;
-    reply = manager.get(QNetworkRequest(QUrl(url)));
-    busy = true;
-
-    connect(reply, SIGNAL(finished()),
-            this, SLOT(finishedDownload()));
-    connect(reply, SIGNAL(readyRead()),
-            this, SLOT(readyRead()));
-    connect(reply, SIGNAL(downloadProgress(qint64,qint64)),
-            this, SLOT(downloadProgress(qint64,qint64)));
-
-    return true;
-}
-
-
-
 bool Download::isActive() {
-    return busy;
-}
-
-
-
-void Download::cancel() {
-    if (!busy || !reply)
-        return;
-
-    busy = false;
-    error = true;
-    errorStr = "download canceled!";
-
-    reply->abort();
-    reply->deleteLater();
-    reply = NULL;
-
-    if (file.isOpen())
-        file.close();
-
-    if (file.exists())
-        file.remove();
-
-    emit finished(false);
+    return isRunning;
 }
 
 
@@ -117,55 +56,118 @@ bool Download::hasError() {
 
 
 
-//###
-//### Private slots
-//###
+bool Download::download(const QString url, const QString destPath) {
+    if (isRunning)
+        return false;
+
+    attempts = 0;
+    this->destPath = destPath;
+
+    return _download(url);
+}
 
 
 
-void Download::finishedDownload() {
+void Download::cancel() {
+    if (!isRunning || !reply)
+        return;
+
+    reply->abort();
+    reply->deleteLater();
+    reply = NULL;
+
     if (file.isOpen())
         file.close();
 
-    if (busy) {
-        busy = false;
-
-        if (reply->error() != QNetworkReply::NoError) {
-            error = true;
-            errorStr = reply->errorString();
-        }
-
-        reply->deleteLater();
-        reply = NULL;
-    }
-    else {
-        error = true;
-        errorStr = "Network reply is already destroyed!?";
-    }
-
-    if (error && file.exists())
+    if (file.exists())
         file.remove();
 
-    // Retry if this was the first attempt
-    if (error && attempts < RETRYATTEMPTS) {
-        ++attempts;
-        download(url, true);
-        return;
+    isRunning = false;
+    error = true;
+    errorStr = "error: download canceled!";
+
+    emit finished(false);
+}
+
+
+
+
+//###
+//### Private
+//###
+
+
+bool Download::_download(const QString url) {
+    // Clean up first
+    errorStr.clear();
+    error = false;
+
+    // Set url and file path
+    this->url = url;
+    file.setFileName(destPath + "/" + QFileInfo(QUrl(url).path()).fileName());
+
+    // Open file
+    if ((file.exists() && !file.remove())
+            || !file.open(QIODevice::WriteOnly)) {
+        errorStr = "error: failed to open file!";
+        return false;
     }
 
-    emit finished(!error);
+    // Create network reply
+    reply = manager.get(QNetworkRequest(QUrl(url)));
+    isRunning = true;
+
+    // Connect signals and slots
+    connect(reply, SIGNAL(readyRead()),
+            this, SLOT(readyRead()));
+    connect(reply, SIGNAL(downloadProgress(qint64,qint64)),
+            this, SLOT(downloadProgress(qint64,qint64)));
+
+    return true;
 }
 
 
 
 void Download::readyRead() {
-    if (file.isOpen())
-        file.write(reply->readAll());
-    else
-        cancel();
+    file.write(reply->readAll());
 }
 
 
 
 void Download::downloadProgress(qint64,qint64) {
+}
+
+
+
+void Download::fileDownloaded(QNetworkReply *reply) {
+    // Close file
+    file.close();
+
+    // Check for errors
+    if (reply->error() != QNetworkReply::NoError) {
+        error = true;
+        errorStr = reply->errorString();
+    }
+
+    reply->deleteLater();
+    this->reply = NULL;
+
+    // remove file on error
+    if (error && file.exists())
+        file.remove();
+
+    file.setFileName("");
+
+    // Retry if this was the first attempt
+    if (error && attempts < RETRYATTEMPTS) {
+        ++attempts;
+        _download(url);
+        return;
+    }
+
+    // Reset value
+    isRunning = false;
+
+    // Emit signal
+    emit finished(!error);
 }
