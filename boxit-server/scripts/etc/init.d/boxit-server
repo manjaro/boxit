@@ -13,7 +13,7 @@
 case "$1" in
    start)
       echo "Clearing tmp folders..."
-      rm -fr /var/repo/boxit_tmp
+      rm -fr /var/tmp/boxit
 
       echo "Starting boxit server..."
       su boxit -c /usr/bin/boxit-server &>/var/repo/boxit-server.log &
