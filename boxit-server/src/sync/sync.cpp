@@ -229,88 +229,57 @@ error:
 
 bool Sync::downloadSyncPackages(const QList<Package> & downloadPackages) {
     const QString syncPath = Global::getConfig().syncPoolDir;
-    QStringList syncFiles;
-    bool success = true;
-
 
     // Download each file
     for (int i = 0; i < downloadPackages.size(); ++i) {
         const Package *package = &downloadPackages.at(i);
-        QStringList addSyncFiles;
 
         // Update status
         emit status(i + 1, downloadPackages.size());
         Status::setBranchStateChanged(branch->name, "synchronizing packages [" + QString::number(i + 1) + "/" + QString::number(downloadPackages.size()) + "]", "", Status::STATE_RUNNING);
 
+        const QString pkgPath = syncPath + "/" + package->fileName;
+        const QString sigPath = pkgPath + BOXIT_SIGNATURE_ENDING;
+
         // Download file...
         if (package->downloadPackage) {
-            if (!downloadFile(package->url + package->fileName)) {
+            if (!downloadFile(package->url + package->fileName, syncPath)) {
                 errorMessage = QString("error: failed to download package '%1'!").arg(package->fileName);
-                success = false;
-                break;
+                return false;
             }
 
             // Check if package checksum is ok
-            if (CryptSHA256::sha256CheckSum(tmpPath + "/" + package->fileName) != package->sha256sum) {
+            if (CryptSHA256::sha256CheckSum(pkgPath) != package->sha256sum) {
                 errorMessage = QString("error: package checksum doesn't match for package '%1'!").arg(package->fileName);
-                success = false;
-                break;
+
+                // Remove file again
+                QFile::remove(pkgPath);
+
+                return false;
             }
 
-            // Fix file permission to be sure on move/copy that it has the right permission from beginning
-            Global::fixFilePermission(tmpPath + "/" + package->fileName);
-
-            // Add to temporary list
-            addSyncFiles.append(package->fileName);
+            // Fix file permission
+            Global::fixFilePermission(pkgPath);
         }
 
         // Download signature file...
         if (package->downloadSignature) {
-            if (!downloadFile(package->url + package->fileName + BOXIT_SIGNATURE_ENDING)) {
+            if (!downloadFile(package->url + package->fileName + BOXIT_SIGNATURE_ENDING, syncPath)) {
                 errorMessage = QString("error: failed to download signature of package '%1'!").arg(package->fileName);
-                success = false;
-                break;
-            }
 
-            // Fix file permission to be sure on move/copy that it has the right permission from beginning
-            Global::fixFilePermission(tmpPath + "/" + package->fileName + BOXIT_SIGNATURE_ENDING);
+                // Remove package again. A signature is always required!
+                QFile::remove(pkgPath);
 
-            // Add to temporary list
-            addSyncFiles.append(package->fileName + BOXIT_SIGNATURE_ENDING);
-        }
-
-        // Finally add to real list if no error occurred
-        syncFiles.append(addSyncFiles);
-    }
-
-
-    // Update status
-    Status::setBranchStateChanged(branch->name, "moving synchronization packages...", "", Status::STATE_RUNNING);
-
-
-    // Just sleep a moment to ensure all files descriptors are closed -> Move/Copy bug
-    for (int i = 0; i < 100; ++i) {
-        usleep(10000);
-    }
-
-
-    // Now move files to final destination
-    foreach (const QString file, syncFiles) {
-        // Move file to sync pool directory
-        if (!QDir().rename(tmpPath + "/" + file, syncPath + "/" + file)) {
-            // Try to copy it on error. Move fails if source and destination folder are not on the same partition...
-            if (!QFile::copy(tmpPath + "/" + file, syncPath + "/" + file)) {
-                errorMessage = QString("error: failed to copy file '%1' to sync folder!").arg(file);
                 return false;
             }
-        }
 
-        // Fix file permission
-        Global::fixFilePermission(syncPath + "/" + file);
+            // Fix file permission
+            Global::fixFilePermission(sigPath);
+        }
     }
 
 
-    return success;
+    return true;
 }
 
 
@@ -325,7 +294,7 @@ bool Sync::getDownloadSyncPackages(QString url, const QString repoName, const QS
     errorMessage.clear();
 
     // First download the database...
-    if (!downloadFile(url + repoName + BOXIT_DB_ENDING))
+    if (!downloadFile(url + repoName + BOXIT_DB_ENDING, tmpPath))
         return false;
 
     // Fill the packages list
@@ -382,12 +351,12 @@ void Sync::cleanupTmpDir() {
 
 
 
-bool Sync::downloadFile(const QString url) {
+bool Sync::downloadFile(const QString url, const QString destPath) {
     Download download;
     QEventLoop eventLoop;
     QObject::connect(&download, SIGNAL(finished(bool)), &eventLoop, SLOT(quit()));
 
-    if (!download.download(url, tmpPath)) {
+    if (!download.download(url, destPath)) {
         errorMessage = "error: failed to download file '" + url + "'!";
         return false;
     }

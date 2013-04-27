@@ -78,7 +78,7 @@ private:
     bool downloadSyncPackages(const QList<Package> & downloadPackages);
     bool getDownloadSyncPackages(QString url, const QString repoName, const QStringList & excludeFiles, QList<Package> & downloadPackages, QStringList & dbPackages);
     void cleanupTmpDir();
-    bool downloadFile(const QString url);
+    bool downloadFile(const QString url, const QString destPath);
     bool fillPackagesList(const QString repoName, QList<Package> & packages);
     bool matchWithWildcard(const QString &str, const QStringList &list);
 
