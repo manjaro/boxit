@@ -383,6 +383,7 @@ void Sync::cleanupTmpDir() {
 
 
 bool Sync::downloadFile(const QString url) {
+    Download download;
     QEventLoop eventLoop;
     QObject::connect(&download, SIGNAL(finished(bool)), &eventLoop, SLOT(quit()));
 
