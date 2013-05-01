@@ -28,6 +28,7 @@
 #include <QMutex>
 #include <QMutexLocker>
 #include <QCoreApplication>
+#include <unistd.h>
 
 #include "global.h"
 #include "const.h"

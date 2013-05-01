@@ -257,8 +257,16 @@ void Branch::repoThreadWaiting(Repo *repo, int threadSessionID) {
     for (int i = 0; i < repos.size(); ++i) {
         Repo *r = repos[i];
 
-        if (r->getThreadSessionID() == threadSessionID && r->waitingForCommit())
+        if (r->getThreadSessionID() == threadSessionID && r->waitingForCommit()) {
+            // Wait for a short time if this is the calling repository process.
+            // The wait condition might not sleep. We have to be sure it is already waiting...
+            // Otherwise this would cause a deadlock!
+            if (r == repo)
+                usleep(650000);
+
+            // Commit changes to repository
             r->commit();
+        }
     }
 }
 

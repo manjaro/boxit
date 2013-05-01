@@ -1412,6 +1412,9 @@ bool pushBranch() {
         return false;
     }
 
+    infoAddPackages.sort();
+    infoRemovePackages.sort();
+
     while (true) {
         QString answer = getInput(":: Remove " + QString::number(infoRemovePackages.size()) + " remote package(s) and upload " + QString::number(infoAddPackages.size()) + " package(s) ? [Y/n/d] (d=details) ", false, false).toLower().trimmed();
         if (answer == "d") {
