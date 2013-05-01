@@ -424,7 +424,7 @@ bool Database::snapshotBranch(const QString sourceBranchName, const QString dest
                 continue;
 
             Global::RepoChanges repoChanges;
-            repoChanges.branchName = sourceBranch->name;
+            repoChanges.branchName = destBranch->name;
             repoChanges.repoName = srcRepo->getName();
             repoChanges.repoArchitecture = srcRepo->getArchitecture();
             repoChanges.addedPackages = srcRepo->getSyncPackages();
@@ -477,7 +477,7 @@ bool Database::snapshotBranch(const QString sourceBranchName, const QString dest
                     continue;
 
                 Global::RepoChanges repoChanges;
-                repoChanges.branchName = sourceBranch->name;
+                repoChanges.branchName = destBranch->name;
                 repoChanges.repoName = srcRepo->getName();
                 repoChanges.repoArchitecture = srcRepo->getArchitecture();
 
