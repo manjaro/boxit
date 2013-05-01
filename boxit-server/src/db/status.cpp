@@ -35,7 +35,7 @@ Status::Status()
 {
     timer.setInterval(60000); // 60 sec
 
-    commitTimer.setInterval(5000); // 5 sec
+    commitTimer.setInterval(10000); // 10 sec
     commitTimer.setSingleShot(true);
 
     // Connect signals and slots
@@ -274,55 +274,26 @@ void Status::commitTimeout() {
     while (it.hasNext()) {
         it.next();
 
-        QStringList attachments;
+        QString messagePrefix = "### BoxIt memo ###\n\n";
+        messagePrefix += QString("User %1 committed following changes:\n\n").arg(it.key());
 
-        // Create working folder
-        if ((QDir(BOXIT_STATUS_TMP).exists() && !Global::rmDir(BOXIT_STATUS_TMP))) {
-            cerr << "error: failed to remove folder '" << BOXIT_STATUS_TMP << "'" << endl;
-            continue;
-        }
-
-        if (!QDir().mkpath(BOXIT_STATUS_TMP)) {
-            cerr << "error: failed to create folder '" << BOXIT_STATUS_TMP << "'" << endl;
-            continue;
-        }
-
-        QString message = "### BoxIt memo ###\n\n";
-        message += QString("User %1 committed following changes:\n\n").arg(it.key());
+        QList<Global::RepoChanges> repoChangesList;
 
         for (int i = 0; i < it.value().size(); ++i) {
             RepoCommit *repo = it.value()[i];
 
-            message += QString(" - %1 %2 %3:  %4 new and %5 removed package(s)\n").arg(repo->branchName, repo->name, repo->architecture,
-                                                                                    QString::number(repo->addPackages.size()),
-                                                                                    QString::number(repo->removePackages.size()));
+            Global::RepoChanges repoChanges;
+            repoChanges.branchName = repo->branchName;
+            repoChanges.repoName = repo->name;
+            repoChanges.repoArchitecture = repo->architecture;
+            repoChanges.addedPackages = repo->addPackages;
+            repoChanges.removedPackages = repo->removePackages;
 
-            // Create attachment file
-            QFile file(QString(BOXIT_STATUS_TMP) + "/" + repo->branchName + "_" + repo->name + "_" + repo->architecture);
-            if (!file.open(QIODevice::WriteOnly | QIODevice::Text))
-                continue;
-
-            QTextStream out(&file);
-            if (!repo->addPackages.isEmpty()) {
-                out << "[New Packages]\n" << repo->addPackages.join("\n");
-
-                if (!repo->removePackages.isEmpty())
-                    out << "\n\n\n";
-            }
-
-            if (!repo->removePackages.isEmpty())
-                out << "[Removed Packages]\n" << repo->removePackages.join("\n");
-
-            file.close();
-
-            // Add to list
-            attachments.append(file.fileName());
+            repoChangesList.append(repoChanges);
         }
 
-
         // Send e-mail
-        if (!Global::sendMemoEMail(message, attachments))
-            cerr << "error: failed to send e-mail!" << endl;
+        Global::sendMemoEMail(messagePrefix, repoChangesList);
     }
 
     // Clean up

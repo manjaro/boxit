@@ -34,10 +34,14 @@
 #include <QCryptographicHash>
 #include <QMutex>
 #include <QMutexLocker>
+#include <QDateTime>
 #include <unistd.h>
-#include "const.h"
+#include <iostream>
 #include <sys/stat.h>
 
+#include "const.h"
+
+using namespace std;
 
 
 class Global
@@ -48,10 +52,16 @@ public:
         QStringList mailingListEMails;
     };
 
+    struct RepoChanges {
+        QString branchName, repoName, repoArchitecture;
+        QStringList addedPackages, removedPackages;
+    };
+
     static int getNewUniqueSessionID();
     static QString getNameofPKG(QString pkg);
     static QString getVersionofPKG(QString pkg);
     static QByteArray sha1CheckSum(const QString filePath);
+    static bool sendMemoEMail(const QString mailPrefixMessage, const QList<RepoChanges> & repoChanges);
     static bool sendMemoEMail(const QString mailMessage, const QStringList attachments);
     static bool sendEMail(const QString subject, const QString to, const QString text, const QStringList attachments);
     static bool rmDir(const QString path, const bool onlyHidden = false, const bool onlyContent = false);

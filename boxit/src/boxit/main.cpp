@@ -89,6 +89,13 @@ struct LocalRepo {
 
 
 
+struct OverwrittenPackagesInRepo {
+    QString repoName, repoArchitecture;
+    QStringList overwrittenPackages, newerSyncPackages;
+};
+
+
+
 
 
 // General
@@ -1604,7 +1611,7 @@ bool pushBranch() {
     }
 
     cout << endl << ":: Process session successfully finished." << endl;
-    sleep(3);
+    sleep(1);
 
     // Pull changes
     if (!pullBranch())
@@ -1919,9 +1926,12 @@ bool checkMatchRepositories(QList<LocalRepo> & repos) {
 
 
 bool checkOverwriteSyncPackages(QList<LocalRepo> & repos) {
+    QList<OverwrittenPackagesInRepo> infoRepos;
+    int totalOverwrittenPackages = 0;
+
     for (int i = 0; i < repos.size(); ++i) {
         LocalRepo *repo = &repos[i];
-        QStringList overwrittenPackages, newerSyncPackages;
+        OverwrittenPackagesInRepo infoRepo;
 
         foreach (const QString package, repo->packages) {
             const QString name = getNameofPKG(package);
@@ -1930,60 +1940,86 @@ bool checkOverwriteSyncPackages(QList<LocalRepo> & repos) {
             // Check if same package exists in sync packages
             foreach (const QString syncPackage, repo->parentRepo->syncPackages) {
                 if (name == getNameofPKG(syncPackage)) {
-                    overwrittenPackages.append(syncPackage + "  ->  " + package);
+                    infoRepo.overwrittenPackages.append(syncPackage + "  ->  " + package);
 
                     // Check if sync package is newer than the local package
                     if (version < Version(getVersionofPKG(syncPackage)))
-                        newerSyncPackages.append(syncPackage + "  ->  " + package);
+                        infoRepo.newerSyncPackages.append(syncPackage + "  ->  " + package);
 
                     break;
                 }
             }
         }
 
-        newerSyncPackages.removeDuplicates();
-        overwrittenPackages.removeDuplicates();
-        newerSyncPackages.sort();
-        overwrittenPackages.sort();
+        infoRepo.newerSyncPackages.removeDuplicates();
+        infoRepo.overwrittenPackages.removeDuplicates();
+        infoRepo.newerSyncPackages.sort();
+        infoRepo.overwrittenPackages.sort();
 
-        if (overwrittenPackages.isEmpty())
+        if (infoRepo.overwrittenPackages.isEmpty())
             continue;
 
-        while (true) {
-            QString answer = getInput(QString(":: %1 package(s) overwrite sync packages in repository %2 %3!\n   Continue? [Y/n/d] (d=details) ").arg(QString::number(overwrittenPackages.size()), repo->name, repo->architecture), false, false).toLower().trimmed();
+        // Add to list
+        infoRepos.append(infoRepo);
 
-            if (answer == "d") {
-                cout << endl << "overwritten packages:" << endl;
-                cout << endl << "   [OVERWRITTEN SYNC PACKAGE]  ->  [LOCAL PACKAGE]" << endl << endl;
+        // Update count
+        totalOverwrittenPackages += infoRepo.overwrittenPackages.size();
+    }
 
-                for (int i = 0; i < overwrittenPackages.size(); ++i) {
-                    cout << "   " << overwrittenPackages.at(i).toUtf8().data() << endl;
+
+    if (totalOverwrittenPackages > 0) {
+        QString answer = getInput(QString(":: %1 package(s) overwrite sync packages!\n   Continue? [y/n/D] (D=details) ").arg(QString::number(totalOverwrittenPackages)), false, false).toLower().trimmed();
+
+        if (answer == "n") {
+            cerr << "abording..." << endl;
+            return false;
+        }
+        else if (answer.isEmpty() || answer != "y") {
+            for (int i = 0; i < infoRepos.size(); ++i) {
+                const OverwrittenPackagesInRepo *infoRepo = &infoRepos.at(i);
+
+                while (true) {
+                    QString answer = getInput(QString(":: %1 package(s) overwrite sync packages in repository %2 %3!\n   Continue? [Y/n/d] (d=details) ").arg(QString::number(infoRepo->overwrittenPackages.size()), infoRepo->repoName, infoRepo->repoArchitecture), false, false).toLower().trimmed();
+
+                    if (answer == "d") {
+                        cout << endl << "overwritten packages:" << endl;
+                        cout << endl << "   [OVERWRITTEN SYNC PACKAGE]  ->  [LOCAL PACKAGE]" << endl << endl;
+
+                        for (int i = 0; i < infoRepo->overwrittenPackages.size(); ++i) {
+                            cout << "   " << infoRepo->overwrittenPackages.at(i).toUtf8().data() << endl;
+                        }
+
+                        cout << endl;
+                        continue;
+                    }
+                    else if (!answer.isEmpty() && answer != "y") {
+                        cerr << "abording..." << endl;
+                        return false;
+                    }
+                    else {
+                        break;
+                    }
                 }
-
-                cout << endl;
-                continue;
-            }
-            else if (!answer.isEmpty() && answer != "y") {
-                cerr << "abording..." << endl;
-                return false;
-            }
-            else {
-                break;
             }
         }
+    }
 
-        if (newerSyncPackages.isEmpty())
+
+    for (int i = 0; i < infoRepos.size(); ++i) {
+        const OverwrittenPackagesInRepo *infoRepo = &infoRepos.at(i);
+
+        if (infoRepo->newerSyncPackages.isEmpty())
             continue;
 
         while (true) {
-            QString answer = getInput(QString(":: %1 overwritten sync package(s) are newer than local package(s) in repository %2 %3!\n   Continue? [Y/n/d] (d=details) ").arg(QString::number(newerSyncPackages.size()), repo->name, repo->architecture), false, false).toLower().trimmed();
+            QString answer = getInput(QString(":: %1 overwritten sync package(s) are newer than local package(s) in repository %2 %3!\n   Continue? [Y/n/d] (d=details) ").arg(QString::number(infoRepo->newerSyncPackages.size()), infoRepo->repoName, infoRepo->repoArchitecture), false, false).toLower().trimmed();
 
             if (answer == "d") {
                 cout << endl << "newer overwritten sync packages:" << endl;
                 cout << endl << "   [OVERWRITTEN SYNC PACKAGE]  ->  [LOCAL PACKAGE]" << endl << endl;
 
-                for (int i = 0; i < newerSyncPackages.size(); ++i) {
-                    cout << "   " << newerSyncPackages.at(i).toUtf8().data() << endl;
+                for (int i = 0; i < infoRepo->newerSyncPackages.size(); ++i) {
+                    cout << "   " << infoRepo->newerSyncPackages.at(i).toUtf8().data() << endl;
                 }
 
                 cout << endl;

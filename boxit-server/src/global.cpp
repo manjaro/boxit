@@ -84,6 +84,75 @@ QByteArray Global::sha1CheckSum(const QString filePath) {
 
 
 
+bool Global::sendMemoEMail(const QString mailPrefixMessage, const QList<RepoChanges> & repoChanges) {
+    QStringList attachments;
+    const QString tmpPath = QString(BOXIT_STATUS_TMP) + "/" + QString::number(qrand()) + "_" + QDateTime::currentDateTime().toString(Qt::ISODate);
+    bool success = true;
+
+    // Create working folder
+    if (QDir(tmpPath).exists() && !Global::rmDir(tmpPath)) {
+        cerr << "error: failed to remove folder '" << tmpPath.toUtf8().data() << "'" << endl;
+        return false;
+    }
+
+    if (!QDir().mkpath(tmpPath)) {
+        cerr << "error: failed to create folder '" << tmpPath.toUtf8().data() << "'" << endl;
+        return false;
+    }
+
+    QString message = mailPrefixMessage;
+
+    for (int i = 0; i < repoChanges.size(); ++i) {
+        const RepoChanges *repo = &repoChanges.at(i);
+
+        message += QString(" - %1 %2 %3:  %4 new and %5 removed package(s)\n").arg(repo->branchName, repo->repoName, repo->repoArchitecture,
+                                                                                QString::number(repo->addedPackages.size()),
+                                                                                QString::number(repo->removedPackages.size()));
+
+        // Create attachment file
+        QFile file(QString(tmpPath) + "/" + repo->branchName + "_" + repo->repoName + "_" + repo->repoArchitecture);
+        if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            success = false;
+            goto remove_tmp_dir;
+        }
+
+        QTextStream out(&file);
+        if (!repo->addedPackages.isEmpty()) {
+            out << "[New Packages]\n" << repo->addedPackages.join("\n");
+
+            if (!repo->removedPackages.isEmpty())
+                out << "\n\n\n";
+        }
+
+        if (!repo->removedPackages.isEmpty())
+            out << "[Removed Packages]\n" << repo->removedPackages.join("\n");
+
+        file.close();
+
+        // Add to list
+        attachments.append(file.fileName());
+    }
+
+
+    // Send e-mail
+    if (!Global::sendMemoEMail(message, attachments)) {
+        cerr << "error: failed to send e-mail!" << endl;
+        success = false;
+        goto remove_tmp_dir;
+    }
+
+
+remove_tmp_dir:
+
+    // Remove working folder again
+    if (QDir(tmpPath).exists() && !Global::rmDir(tmpPath))
+        cerr << "error: failed to remove folder '" << tmpPath.toUtf8().data() << "'" << endl;
+
+    return success;
+}
+
+
+
 bool Global::sendMemoEMail(const QString mailMessage, const QStringList attachments) {
     // Send e-mail message to mailing lists
     bool ret = true;

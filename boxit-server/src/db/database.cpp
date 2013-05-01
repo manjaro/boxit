@@ -367,6 +367,7 @@ bool Database::snapshotBranch(const QString sourceBranchName, const QString dest
     QMutexLocker locker(&mutex);
 
     bool returnCode = false;
+    QList<Global::RepoChanges> repoChangesList;
 
     if (sourceBranchName == destBranchName)
         return false;
@@ -402,6 +403,118 @@ bool Database::snapshotBranch(const QString sourceBranchName, const QString dest
     }
 
 
+
+    // Get all changes for the status e-mail
+    {
+        // First get all added repos
+        for (int i = 0; i < sourceBranch->repos.size(); ++i) {
+            Repo *srcRepo = sourceBranch->repos[i];
+            bool found = false;
+
+            for (int i = 0; i < destBranch->repos.size(); ++i) {
+                Repo *destRepo = destBranch->repos[i];
+
+                if (srcRepo->getName() == destRepo->getName() && srcRepo->getArchitecture() == destRepo->getArchitecture()) {
+                    found = true;
+                    break;
+                }
+            }
+
+            if (found)
+                continue;
+
+            Global::RepoChanges repoChanges;
+            repoChanges.branchName = sourceBranch->name;
+            repoChanges.repoName = srcRepo->getName();
+            repoChanges.repoArchitecture = srcRepo->getArchitecture();
+            repoChanges.addedPackages = srcRepo->getSyncPackages();
+            repoChanges.addedPackages.append(srcRepo->getOverlayPackages());
+
+            if (repoChanges.addedPackages.isEmpty())
+                continue;
+
+            repoChangesList.append(repoChanges);
+        }
+
+        // Get all removed repos
+        for (int i = 0; i < destBranch->repos.size(); ++i) {
+            Repo *destRepo = destBranch->repos[i];
+            bool found = false;
+
+            for (int i = 0; i < sourceBranch->repos.size(); ++i) {
+                Repo *srcRepo = sourceBranch->repos[i];
+
+                if (srcRepo->getName() == destRepo->getName() && srcRepo->getArchitecture() == destRepo->getArchitecture()) {
+                    found = true;
+                    break;
+                }
+            }
+
+            if (found)
+                continue;
+
+            Global::RepoChanges repoChanges;
+            repoChanges.branchName = destBranch->name;
+            repoChanges.repoName = destRepo->getName();
+            repoChanges.repoArchitecture = destRepo->getArchitecture();
+            repoChanges.removedPackages = destRepo->getSyncPackages();
+            repoChanges.removedPackages.append(destRepo->getOverlayPackages());
+
+            if (repoChanges.removedPackages.isEmpty())
+                continue;
+
+            repoChangesList.append(repoChanges);
+        }
+
+        // Get all package changes
+        for (int i = 0; i < sourceBranch->repos.size(); ++i) {
+            Repo *srcRepo = sourceBranch->repos[i];
+
+            for (int i = 0; i < destBranch->repos.size(); ++i) {
+                Repo *destRepo = destBranch->repos[i];
+
+                if (srcRepo->getName() != destRepo->getName() || srcRepo->getArchitecture() != destRepo->getArchitecture())
+                    continue;
+
+                Global::RepoChanges repoChanges;
+                repoChanges.branchName = sourceBranch->name;
+                repoChanges.repoName = srcRepo->getName();
+                repoChanges.repoArchitecture = srcRepo->getArchitecture();
+
+                QStringList oldPackages = destRepo->getSyncPackages();
+                oldPackages.append(destRepo->getOverlayPackages());
+
+                QStringList newPackages = srcRepo->getSyncPackages();
+                newPackages.append(srcRepo->getOverlayPackages());
+
+                // Added packages
+                foreach (const QString package, newPackages) {
+                    if (!oldPackages.contains(package))
+                        repoChanges.addedPackages.append(package);
+                }
+
+                // Removed packages
+                foreach (const QString package, oldPackages) {
+                    if (!newPackages.contains(package))
+                        repoChanges.removedPackages.append(package);
+                }
+
+                repoChanges.addedPackages.removeDuplicates();
+                repoChanges.removedPackages.removeDuplicates();
+                repoChanges.addedPackages.sort();
+                repoChanges.removedPackages.sort();
+
+                if (repoChanges.addedPackages.isEmpty() && repoChanges.removedPackages.isEmpty())
+                    continue;
+
+                repoChangesList.append(repoChanges);
+
+                break;
+            }
+        }
+    }
+
+
     // Remove destination branch
     if (!Global::rmDir(destBranch->path))
         goto unlockRepos;
@@ -434,7 +547,7 @@ bool Database::snapshotBranch(const QString sourceBranchName, const QString dest
     branches.append(destBranch);
 
     // Send e-mail
-    Global::sendMemoEMail(QString("### BoxIt memo ###\n\nUser %1 created a snapshot of branch '%2' to '%3'.").arg(username, sourceBranchName, destBranchName), QStringList());
+    Global::sendMemoEMail(QString("### BoxIt memo ###\n\nUser %1 created a snapshot of branch '%2' to '%3'.\n\n").arg(username, sourceBranchName, destBranchName), repoChangesList);
 
 
     returnCode = true;

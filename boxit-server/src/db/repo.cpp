@@ -240,21 +240,27 @@ void Repo::run() {
 
     // Get a list of all added and removed packages
     {
-        QStringList allPackages = syncPackages;
-        allPackages.append(overlayPackages);
-
-        QStringList allTmpPackages = tmpSyncPackages;
-        allTmpPackages.append(tmpOverlayPackages);
-
-        // Added packages
-        foreach (const QString package, allTmpPackages) {
-            if (!allPackages.contains(package))
+        // Added sync packages
+        foreach (const QString package, tmpSyncPackages) {
+            if (!syncPackages.contains(package))
                 addPackages.append(package);
         }
 
-        // Removed packages
-        foreach (const QString package, allPackages) {
-            if (!allTmpPackages.contains(package))
+        // Removed sync packages
+        foreach (const QString package, syncPackages) {
+            if (!tmpSyncPackages.contains(package))
+                removePackages.append(package);
+        }
+
+        // Added overlay packages
+        foreach (const QString package, tmpOverlayPackages) {
+            if (!overlayPackages.contains(package))
+                addPackages.append(package);
+        }
+
+        // Removed overlay packages
+        foreach (const QString package, overlayPackages) {
+            if (!tmpOverlayPackages.contains(package))
                 removePackages.append(package);
         }
 
