@@ -1,0 +1,3 @@
+* Improve the commit process. Don't remove and readd all symlinks. Instead only work with the differences...
+* Maybe run the snapshot function in a new thread
+* Try to find the delete folder bug after a push

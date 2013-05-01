@@ -22,7 +22,7 @@
 #define CONST_H
 
 
-#define BOXIT_VERSION 5
+#define BOXIT_VERSION 6
 #define BOXIT_PORT 59872
 #define BOXIT_SPLIT_CHAR "|"
 #define BOXIT_SOCKET_MAX_SIZE 50000

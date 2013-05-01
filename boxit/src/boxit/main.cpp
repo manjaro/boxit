@@ -1933,6 +1933,9 @@ bool checkOverwriteSyncPackages(QList<LocalRepo> & repos) {
         LocalRepo *repo = &repos[i];
         OverwrittenPackagesInRepo infoRepo;
 
+        infoRepo.repoName = repo->name;
+        infoRepo.repoArchitecture = repo->architecture;
+
         foreach (const QString package, repo->packages) {
             const QString name = getNameofPKG(package);
             const Version version = getVersionofPKG(package);
