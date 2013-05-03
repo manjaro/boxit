@@ -61,7 +61,8 @@ enum ARGUMENTS {
     ARG_STATE = 0x0010,
     ARG_ERRORS = 0x0020,
     ARG_SYNC = 0x0040,
-    ARG_SNAP = 0x0080
+    ARG_SNAP = 0x0080,
+    ARG_COMPARE = 0x0100
 };
 
 
@@ -157,8 +158,10 @@ bool changeSyncUrlOnRequest(const QString branchName);
 bool changeSyncExcludeFiles(const QString branchName);
 
 bool changePassword();
-
 bool snapshotBranch();
+
+bool compareBranches();
+void printDifferentBranchPackages(const QString text, const QString branch1Name, const QString branch2Name, const QStringList & packages1, const QStringList & packages2, bool & hasDifferentPackages);
 
 
 // Auto completion
@@ -228,6 +231,9 @@ int main(int argc, char *argv[])
         else if (strcmp(argv[nArg], "snap") == 0) {
             arguments = (ARGUMENTS)(arguments | ARG_SNAP);
         }
+        else if (strcmp(argv[nArg], "compare") == 0) {
+            arguments = (ARGUMENTS)(arguments | ARG_COMPARE);
+        }
         else {
             cerr << "invalid option: " << argv[nArg] << endl << endl;
             printHelp();
@@ -255,13 +261,19 @@ int main(int argc, char *argv[])
     // Snap argument
     if (arguments & ARG_SNAP) {
         if (snapshotBranch())   return 0;
-        else                return 1; // Error messages are printed by the method
+        else                    return 1; // Error messages are printed by the method
     }
 
     // Passwd argument
     if (arguments & ARG_PASSWD) {
-        if (changePassword())  return 0;
-        else                return 1; // Error messages are printed by the method
+        if (changePassword())   return 0;
+        else                    return 1; // Error messages are printed by the method
+    }
+
+    // Compare argument
+    if (arguments & ARG_COMPARE) {
+        if (compareBranches())  return 0;
+        else                    return 1; // Error messages are printed by the method
     }
 
     // State argument
@@ -331,6 +343,7 @@ void printHelp() {
     cout << "  push\t\tupload all changes" << endl;
     cout << "  sync\t\tsynchronize branch" << endl;
     cout << "  snap\t\tsnapshot branch" << endl;
+    cout << "  compare\tcompare branches" << endl;
     cout << "  state\t\tshow state" << endl;
     cout << "  errors\tshow all remote errors" << endl;
     cout << "  passwd\tchange user password" << endl;
@@ -1145,6 +1158,14 @@ bool fillBranchRepos(Branch & branch, bool withPackages) {
     if (msgID != MSG_SUCCESS) {
         cerr << "error: failed to obtain remote branch repositories! Does the branch exists?" << endl;
         return false;
+    }
+
+    // Sort packages
+    for (int i = 0; i < branch.repos.size(); ++i) {
+        Repo *repo = &branch.repos[i];
+
+        repo->overlayPackages.sort();
+        repo->syncPackages.sort();
     }
 
     return true;
@@ -2660,4 +2681,282 @@ bool snapshotBranch() {
     cout << ":: Snapshot created." << endl;
 
     return true;
+}
+
+
+
+bool compareBranches() {
+    QString host = "";
+    if (!connectAndLoginToHost(host))
+        return false; // Error messages are printed by the method
+
+    // List all available branches
+    QStringList branches;
+
+    if (!getAllRemoteBranches(branches))
+        return false; // Error messages are printed by the method
+
+    cout << ":: Available branches:" << endl << endl;
+    for (int i = 0; i < branches.size(); ++i) {
+        cout << " " << QString::number(i + 1).toUtf8().data() << ") " << branches.at(i).toUtf8().data() << endl;
+    }
+    cout << endl;
+
+
+    // Get user input
+    int index;
+
+    while (true) {
+        index = getInput(":: First Branch index: ", false, false).trimmed().toInt();
+
+        if (index <= 0 || index > branches.size()) {
+            cerr << "error: index is invalid!" << endl;
+            continue;
+        }
+
+        break;
+    }
+    --index;
+
+    const QString firstBranchName = branches.at(index);
+
+
+    while (true) {
+        index = getInput(":: Second Branch index: ", false, false).trimmed().toInt();
+
+        if (index <= 0 || index > branches.size()) {
+            cerr << "error: index is invalid!" << endl;
+            continue;
+        }
+
+        break;
+    }
+    --index;
+
+    const QString secondBranchName = branches.at(index);
+
+
+    if (firstBranchName == secondBranchName) {
+        cerr << "error: first and second branch can't be the same!" << endl;
+        return false;
+    }
+
+    // Ask user to continue
+    QString answer = getInput(QString(":: Compare branch '%1' with branch '%2'.\n   Continue? [Y/n] ").arg(firstBranchName, secondBranchName), false, false).toLower().trimmed();
+    if (!answer.isEmpty() && answer != "y") {
+        cerr << "abording..." << endl;
+        return false;
+    }
+
+
+    // Get branch data
+    Branch firstBranch, secondBranch;
+    firstBranch.name = firstBranchName;
+    secondBranch.name = secondBranchName;
+    firstBranch.serverURL = host;
+    secondBranch.serverURL = host;
+
+    cout << ":: Obtaining data..." << endl;
+
+    if (!fillBranchRepos(firstBranch, true))
+        return false; // Error messages are printed by the method
+
+    if (!fillBranchRepos(secondBranch, true))
+        return false; // Error messages are printed by the method
+
+
+
+    bool hasMissingRepositories = false;
+
+    // Get missing repositories of secondBranch
+    for (int i = 0; i < firstBranch.repos.size(); ++i) {
+        const Repo *firstBranchRepo = &firstBranch.repos.at(i);
+        bool found = false;
+
+        for (int i = 0; i < secondBranch.repos.size(); ++i) {
+            const Repo *secondBranchRepo = &secondBranch.repos.at(i);
+
+            if (secondBranchRepo->name != firstBranchRepo->name || secondBranchRepo->architecture != firstBranchRepo->architecture)
+                continue;
+
+            found = true;
+            break;
+        }
+
+        if (found)
+            continue;
+
+        if (!hasMissingRepositories) {
+            hasMissingRepositories = true;
+            cout << ":: Missing branch repositories:" << endl << endl;
+
+            consoleFill('-', 79);
+            cout << setw(21) << " FIRST BRANCH" << setw(21) << "SECOND BRANCH" << setw(22) << "REPO" << setw(14) << "ARCH" << endl;
+            consoleFill('-', 79);
+        }
+
+        cout << setw(21) << firstBranch.name.toUtf8().data() << setw(21) << "-" << setw(22) << firstBranchRepo->name.toUtf8().data() << setw(14) << firstBranchRepo->architecture.toUtf8().data() << endl;
+    }
+
+    // Get missing repositories of firstBranch
+    for (int i = 0; i < secondBranch.repos.size(); ++i) {
+        const Repo *secondBranchRepo = &secondBranch.repos.at(i);
+        bool found = false;
+
+        for (int i = 0; i < firstBranch.repos.size(); ++i) {
+            const Repo *firstBranchRepo = &firstBranch.repos.at(i);
+
+            if (secondBranchRepo->name != firstBranchRepo->name || secondBranchRepo->architecture != firstBranchRepo->architecture)
+                continue;
+
+            found = true;
+            break;
+        }
+
+        if (found)
+            continue;
+
+        if (!hasMissingRepositories) {
+            hasMissingRepositories = true;
+            cout << ":: Missing branch repositories:" << endl << endl;
+
+            consoleFill('-', 79);
+            cout << setw(21) << " FIRST BRANCH" << setw(21) << "SECOND BRANCH" << setw(22) << "REPO" << setw(14) << "ARCH" << endl;
+            consoleFill('-', 79);
+        }
+
+        cout << setw(21) << "-" << setw(21) << secondBranch.name.toUtf8().data() << setw(22) << secondBranchRepo->name.toUtf8().data() << setw(14) << secondBranchRepo->architecture.toUtf8().data() << endl;
+    }
+
+    if (hasMissingRepositories)
+        cout << endl;
+
+
+    // Get different packages
+    bool hasDifferentPackagesInRepos = false;
+
+    for (int i = 0; i < firstBranch.repos.size(); ++i) {
+        const Repo *firstBranchRepo = &firstBranch.repos.at(i);
+
+        for (int i = 0; i < secondBranch.repos.size(); ++i) {
+            const Repo *secondBranchRepo = &secondBranch.repos.at(i);
+
+            if (secondBranchRepo->name != firstBranchRepo->name || secondBranchRepo->architecture != firstBranchRepo->architecture)
+                continue;
+
+            bool hasDifferentPackages;
+
+            // Overlay packages
+            printDifferentBranchPackages(QString(":: Different overlay package of repository %1 %2").arg(firstBranchRepo->name, firstBranchRepo->architecture).toUtf8().data(),
+                                         firstBranch.name, secondBranch.name,
+                                         firstBranchRepo->overlayPackages, secondBranchRepo->overlayPackages,
+                                         hasDifferentPackages);
+
+            if (hasDifferentPackages)
+                hasDifferentPackagesInRepos = true;
+
+            // Sync packages
+            printDifferentBranchPackages(QString(":: Different sync package of repository %1 %2").arg(firstBranchRepo->name, firstBranchRepo->architecture).toUtf8().data(),
+                                         firstBranch.name, secondBranch.name,
+                                         firstBranchRepo->syncPackages, secondBranchRepo->syncPackages,
+                                         hasDifferentPackages);
+
+            if (hasDifferentPackages)
+                hasDifferentPackagesInRepos = true;
+
+            break;
+        }
+    }
+
+
+    if (!hasMissingRepositories && !hasDifferentPackagesInRepos)
+        cout << ":: Branches are the same." << endl;
+
+    return true;
+}
+
+
+
+void printDifferentBranchPackages(const QString text, const QString branch1Name, const QString branch2Name, const QStringList & packages1, const QStringList & packages2, bool & hasDifferentPackages) {
+    hasDifferentPackages = false;
+    QStringList alreadyPrintedPackages;
+
+    foreach (const QString package, packages1) {
+        if (packages2.contains(package))
+            continue;
+
+        const QString name = getNameofPKG(package);
+        const QString version = getVersionofPKG(package);
+
+        if (alreadyPrintedPackages.contains(name))
+            continue;
+
+        if (!hasDifferentPackages) {
+            hasDifferentPackages = true;
+            cout << endl << text.toUtf8().data() << endl << endl;
+
+            consoleFill('-', 79);
+            cout << setw(36) << "PACKAGE" << setw(21) << branch1Name.toUtf8().data() << setw(21) << branch2Name.toUtf8().data() << endl;
+            consoleFill('-', 79);
+        }
+
+        // Search for other version
+        QString otherVersion = "-";
+
+        foreach(const QString package, packages2) {
+            if (getNameofPKG(package) != name)
+                continue;
+
+            otherVersion = getVersionofPKG(package);
+            break;
+        }
+
+        // Add to list
+        alreadyPrintedPackages.append(name);
+
+        // Print
+        cout << setw(36) << name.toUtf8().data() << setw(21) << version.toUtf8().data() << setw(21) << otherVersion.toUtf8().data() << endl;
+    }
+
+
+    foreach (const QString package, packages2) {
+        if (packages1.contains(package))
+            continue;
+
+        const QString name = getNameofPKG(package);
+        const QString version = getVersionofPKG(package);
+
+        if (alreadyPrintedPackages.contains(name))
+            continue;
+
+        if (!hasDifferentPackages) {
+            hasDifferentPackages = true;
+            cout << endl << text.toUtf8().data() << endl << endl;
+
+            consoleFill('-', 79);
+            cout << setw(36) << "PACKAGE" << setw(21) << branch1Name.toUtf8().data() << setw(21) << branch2Name.toUtf8().data() << endl;
+            consoleFill('-', 79);
+        }
+
+        // Search for other version
+        QString otherVersion = "-";
+
+        foreach(const QString package, packages1) {
+            if (getNameofPKG(package) != name)
+                continue;
+
+            otherVersion = getVersionofPKG(package);
+            break;
+        }
+
+        // Add to list
+        alreadyPrintedPackages.append(name);
+
+        // Print
+        cout << setw(36) << name.toUtf8().data() << setw(21) << otherVersion.toUtf8().data() << setw(21) << version.toUtf8().data() << endl;
+    }
+
+
+    if (hasDifferentPackages)
+        cout << endl;
 }
