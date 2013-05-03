@@ -2847,7 +2847,7 @@ bool compareBranches() {
             bool hasDifferentPackages;
 
             // Overlay packages
-            printDifferentBranchPackages(QString(":: Different overlay package of repository %1 %2").arg(firstBranchRepo->name, firstBranchRepo->architecture).toUtf8().data(),
+            printDifferentBranchPackages(QString(":: Different overlay package(s) in repository %1 %2").arg(firstBranchRepo->name, firstBranchRepo->architecture).toUtf8().data(),
                                          firstBranch.name, secondBranch.name,
                                          firstBranchRepo->overlayPackages, secondBranchRepo->overlayPackages,
                                          hasDifferentPackages);
@@ -2856,7 +2856,7 @@ bool compareBranches() {
                 hasDifferentPackagesInRepos = true;
 
             // Sync packages
-            printDifferentBranchPackages(QString(":: Different sync package of repository %1 %2").arg(firstBranchRepo->name, firstBranchRepo->architecture).toUtf8().data(),
+            printDifferentBranchPackages(QString(":: Different sync package(s) in repository %1 %2").arg(firstBranchRepo->name, firstBranchRepo->architecture).toUtf8().data(),
                                          firstBranch.name, secondBranch.name,
                                          firstBranchRepo->syncPackages, secondBranchRepo->syncPackages,
                                          hasDifferentPackages);
