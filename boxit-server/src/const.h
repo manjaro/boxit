@@ -42,7 +42,7 @@
 #define BOXIT_DB_LINK_ENDING ".db"
 #define BOXIT_DB_DESC_FILE "desc"
 #define BOXIT_REMOVE_ORPHANS_AFTER_DAYS 3
-#define BOXIT_BRANCH_STATE_FILE "state"
+#define BOXIT_STATE_FILE "state"
 #define BOXIT_SYSTEM_USERNAME "system"
 #define BOXIT_SYSTEM_SESSION_ID 1
 

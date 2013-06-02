@@ -38,10 +38,44 @@ MainTimer::~MainTimer() {
 
 
 void MainTimer::run() {
-    while (true) {
-        Database::removeOrphanPoolFiles();
+    int minutes = 0;
 
-        // Wait 3 hours
-        sleep(10800);
+    while (true) {
+        minutes += 10;
+
+        // Set each 10 minutes a new check state
+        setNewCheckState();
+
+        // Run this each 3 hours
+        if (minutes >= 180) {
+            Database::removeOrphanPoolFiles();
+            minutes = 0;
+        }
+
+        // Sleep 10 minutes
+        sleep(600);
     }
+}
+
+
+
+void MainTimer::setNewCheckState() {
+    QFile file(Global::getConfig().repoDir + "/" + BOXIT_STATE_FILE);
+
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        cerr << "error: failed to save '" << file.fileName().toUtf8().data() << "'!" << endl;
+        return;
+    }
+
+    QTextStream out(&file);
+    out << "###\n### BoxIt global state file\n###\n";
+    out << "\n# Unique hash code representing current repository state.\n# This hash code changes in a frequent interval.";
+    out << "\nstate=" << QString(QCryptographicHash::hash(QString(QDateTime::currentDateTime().toString(Qt::ISODate) + QString::number(qrand())).toLocal8Bit(), QCryptographicHash::Sha1).toHex());
+    out << "\n\n# Date and time of the last state update.";
+    out << "\ndate=" << QDateTime::currentDateTime().toString(Qt::ISODate);
+
+    file.close();
+
+    // Fix file permission
+    Global::fixFilePermission(file.fileName());
 }

@@ -192,9 +192,9 @@ bool Branch::updateConfig() {
 void Branch::setNewBranchState() {
     QMutexLocker locker(&setBranchStateMutex);
 
-    QFile file(path + "/" + BOXIT_BRANCH_STATE_FILE);
+    QFile file(path + "/" + BOXIT_STATE_FILE);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
-        cerr << "error: failed to save '" << QString(path + "/" + BOXIT_BRANCH_STATE_FILE).toUtf8().data() << "'!" << endl;
+        cerr << "error: failed to save '" << file.fileName().toUtf8().data() << "'!" << endl;
         return;
     }
 
@@ -208,7 +208,7 @@ void Branch::setNewBranchState() {
     file.close();
 
     // Fix file permission
-    Global::fixFilePermission(path + "/" + BOXIT_BRANCH_STATE_FILE);
+    Global::fixFilePermission(file.fileName());
 }
 
 

@@ -27,6 +27,7 @@
 #include <QFileInfo>
 #include <QDir>
 #include <QStringList>
+#include <QCryptographicHash>
 #include <QDateTime>
 #include "global.h"
 #include "const.h"
@@ -43,6 +44,9 @@ public:
 protected:
     void run();
     
+private:
+    void setNewCheckState();
+
 };
 
 #endif // MAINTIMER_H
