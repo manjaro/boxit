@@ -78,7 +78,7 @@ bool Repo::init() {
 
 bool Repo::setNewRandomState() {
     // Create new state
-    state = QString(QCryptographicHash::hash(QString(state + QDateTime::currentDateTime().toString(Qt::ISODate) + QString::number(qrand())).toLocal8Bit(), QCryptographicHash::Sha1).toHex());
+    state = QString(QCryptographicHash::hash(QString(state + QDateTime::currentDateTimeUtc().toString(Qt::ISODate) + QString::number(qrand())).toLocal8Bit(), QCryptographicHash::Sha1).toHex());
     return updateConfig();
 }
 

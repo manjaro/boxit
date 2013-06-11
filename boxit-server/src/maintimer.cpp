@@ -70,9 +70,9 @@ void MainTimer::setNewCheckState() {
     QTextStream out(&file);
     out << "###\n### BoxIt global state file\n###\n";
     out << "\n# Unique hash code representing current repository state.\n# This hash code changes in a frequent interval.";
-    out << "\nstate=" << QString(QCryptographicHash::hash(QString(QDateTime::currentDateTime().toString(Qt::ISODate) + QString::number(qrand())).toLocal8Bit(), QCryptographicHash::Sha1).toHex());
+    out << "\nstate=" << QString(QCryptographicHash::hash(QString(QDateTime::currentDateTimeUtc().toString(Qt::ISODate) + QString::number(qrand())).toLocal8Bit(), QCryptographicHash::Sha1).toHex());
     out << "\n\n# Date and time of the last state update.";
-    out << "\ndate=" << QDateTime::currentDateTime().toString(Qt::ISODate);
+    out << "\ndate=" << QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
 
     file.close();
 

@@ -201,9 +201,9 @@ void Branch::setNewBranchState() {
     QTextStream out(&file);
     out << "###\n### BoxIt branch state file\n###\n";
     out << "\n# Unique hash code representing current branch state.\n# This hash code changes as soon as anything changes in this branch.";
-    out << "\nstate=" << QString(QCryptographicHash::hash(QString(QDateTime::currentDateTime().toString(Qt::ISODate) + QString::number(qrand())).toLocal8Bit(), QCryptographicHash::Sha1).toHex());
+    out << "\nstate=" << QString(QCryptographicHash::hash(QString(QDateTime::currentDateTimeUtc().toString(Qt::ISODate) + QString::number(qrand())).toLocal8Bit(), QCryptographicHash::Sha1).toHex());
     out << "\n\n# Date and time of the last branch change.";
-    out << "\ndate=" << QDateTime::currentDateTime().toString(Qt::ISODate);
+    out << "\ndate=" << QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
 
     file.close();
 
