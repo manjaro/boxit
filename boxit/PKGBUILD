@@ -1,0 +1,47 @@
+# maintainer: Philip Müller <philm[at]manjaro[dog]org>
+# maintainer: Roland Singer <roland[at]manjaro[dog]org>
+
+pkgname=boxit
+#pkgver=2.0.$(date +%m%d)
+pkgver=2.1.0
+pkgrel=1
+pkgdesc="Manjaro Linux repository management system - client"
+arch=('i686' 'x86_64')
+url="http://git.manjaro.org"
+license=('GPL')
+depends=('qt5-base' 'readline' 'icu')
+makedepends=('git')
+_git=Yes
+
+if [ "$_git" == "Yes" ]; then
+   source=(git+https://github.com/manjaro/boxit.git)
+   sha256sums=('SKIP')
+else
+   source=("boxit-$pkgver.tar.gz::http://git.manjaro.org/core/boxit/repository/archive.tar.gz?ref=v$pkgver")
+   sha256sums=('SKIP')
+fi
+
+build() {
+  if [ -e "$srcdir/core-$pkgname" ]; then
+	   cd "$srcdir/core-$pkgname/$pkgname/src"
+  else
+     cd "$srcdir/$pkgname/$pkgname/src"
+  fi
+
+  qmake-qt5
+
+  # Build fix
+  make sub-DBus
+  cp DBus/libDBus.a libDBus.a
+
+  make all
+}
+
+package() {
+  if [ -e "$srcdir/core-$pkgname" ]; then
+	   cd "$srcdir/core-$pkgname/$pkgname/src"
+  else
+     cd "$srcdir/$pkgname/$pkgname/src"
+  fi
+  make INSTALL_ROOT="${pkgdir}" install
+}

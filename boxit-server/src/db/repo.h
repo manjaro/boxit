@@ -94,7 +94,7 @@ private:
     };
 
     const QString branchName, name, architecture, path, tmpPath, repoDB, repoDBLink;
-    QString state, lockedUsername, threadUsername, threadErrorString;
+    repoFiles, repoFilesLink, QString state, lockedUsername, threadUsername, threadErrorString;
     int lockedSessionID, threadSessionID;
     bool isSyncRepo, waitingCommit, isCommitting;
     QStringList overlayPackages, syncPackages;
@@ -114,6 +114,7 @@ private:
     bool updatePackageDatabase(const QList<Package> & packages);
     bool addPackagesToDatabase(const QStringList & packages);
     bool removePackagesFromDatabase(const QStringList & packages);
+    bool updateFilesToDatabase(const QStringList & packages);
 };
 
 #endif // REPO_H
