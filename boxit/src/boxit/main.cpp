@@ -690,7 +690,7 @@ bool connectToHost(DBusClient & dbus, const QString host) {
     boxitSocket.sendData(MSG_CHECK_VERSION, QByteArray(QString::number((int)BOXIT_VERSION).toUtf8()));
     boxitSocket.readData(msgID);
     if (msgID != MSG_SUCCESS) {
-        cerr << "error: the BoxIt server is running a different version! Abording..." << endl;
+        cerr << "error: the BoxIt server is running a different version! Aborting..." << endl;
 
         // Disconnect from server
         boxitSocket.disconnectFromHost();
@@ -837,7 +837,7 @@ bool initBranch(QString path) {
 
     // Check if .boxit/config exists
     if (!QFile::exists(configPath)) {
-        cerr << "error: config file '" << configPath.toUtf8().data() << "' does not exists!" << endl;
+        cerr << "error: config file '" << configPath.toUtf8().data() << "' does not exist!" << endl;
         return false;
     }
 
@@ -907,7 +907,7 @@ bool initRepo(Repo *repo) {
 
     // Check if repo config exists
     if (!QFile::exists(configPath)) {
-        cerr << "error: config file '" << configPath.toUtf8().data() << "' does not exists!" << endl;
+        cerr << "error: config file '" << configPath.toUtf8().data() << "' does not exist!" << endl;
         return false;
     }
 
@@ -1227,7 +1227,7 @@ bool pullBranch() {
     if (!folders.isEmpty()) {
         QString answer = getInput(":: " + QString::number(folders.size()) + " orphan folder(s) found which will be removed!\n   Continue? [Y/n] ", false, false).toLower().trimmed();
         if (!answer.isEmpty() && answer != "y") {
-            cerr << "abording..." << endl;
+            cerr << "aborting..." << endl;
             return false;
         }
 
@@ -1428,7 +1428,7 @@ bool pushBranch() {
             cerr << "   " << missingSignatures.at(i).toUtf8().data() << endl;
         }
 
-        cerr << endl << "abording..." << endl;
+        cerr << endl << "aborting..." << endl;
 
         return false;
     }
@@ -1466,7 +1466,7 @@ bool pushBranch() {
             continue;
         }
         else if (!answer.isEmpty() && answer != "y") {
-            cerr << "abording..." << endl;
+            cerr << "aborting..." << endl;
             return false;
         }
         else {
@@ -1674,7 +1674,7 @@ bool checkValidArchitecture(QList<LocalRepo> & repos) {
                 continue;
             }
             else if (!answer.isEmpty() && answer != "y") {
-                cerr << "abording..." << endl;
+                cerr << "aborting..." << endl;
                 return false;
             }
             else {
@@ -1774,7 +1774,7 @@ bool checkDuplicatePackages(QList<LocalRepo> & repos) {
                 continue;
             }
             else if (!answer.isEmpty() && answer != "y") {
-                cerr << "abording..." << endl;
+                cerr << "aborting..." << endl;
                 return false;
             }
             else {
@@ -1829,7 +1829,7 @@ bool checkSignatures(QList<LocalRepo> & repos) {
                 continue;
             }
             else if (!answer.isEmpty() && answer != "y") {
-                cerr << "abording..." << endl;
+                cerr << "aborting..." << endl;
                 return false;
             }
             else {
@@ -1932,7 +1932,7 @@ bool checkMatchRepositories(QList<LocalRepo> & repos) {
                 continue;
             }
             else if (!answer.isEmpty() && answer != "y") {
-                cerr << "abording..." << endl;
+                cerr << "aborting..." << endl;
                 return false;
             }
             else {
@@ -1995,7 +1995,7 @@ bool checkOverwriteSyncPackages(QList<LocalRepo> & repos) {
         QString answer = getInput(QString(":: %1 package(s) overwrite sync packages!\n   Continue? [y/n/D] (D=details) ").arg(QString::number(totalOverwrittenPackages)), false, false).toLower().trimmed();
 
         if (answer == "n") {
-            cerr << "abording..." << endl;
+            cerr << "aborting..." << endl;
             return false;
         }
         else if (answer.isEmpty() || answer != "y") {
@@ -2017,7 +2017,7 @@ bool checkOverwriteSyncPackages(QList<LocalRepo> & repos) {
                         continue;
                     }
                     else if (!answer.isEmpty() && answer != "y") {
-                        cerr << "abording..." << endl;
+                        cerr << "aborting..." << endl;
                         return false;
                     }
                     else {
@@ -2050,7 +2050,7 @@ bool checkOverwriteSyncPackages(QList<LocalRepo> & repos) {
                 continue;
             }
             else if (!answer.isEmpty() && answer != "y") {
-                cerr << "abording..." << endl;
+                cerr << "aborting..." << endl;
                 return false;
             }
             else {
@@ -2536,7 +2536,7 @@ bool changeSyncExcludeFiles(const QString branchName) {
     // Ask user to upload new exclude list
     QString answer = getInput(" upload new exclude list? [Y/n] ", false, false).toLower().trimmed();
     if (!answer.isEmpty() && answer != "y") {
-        cerr << "abording..." << endl;
+        cerr << "aborting..." << endl;
         return false;
     }
 
@@ -2660,7 +2660,7 @@ bool snapshotBranch() {
     // Ask user to continue
     QString answer = getInput(QString(":: Create a snapshot of branch '%1' and save it to branch '%2'.\n   Continue? [y/N] ").arg(sourceBranchName, destBranchName), false, false).toLower().trimmed();
     if (answer != "y") {
-        cerr << "abording..." << endl;
+        cerr << "aborting..." << endl;
         return false;
     }
 
@@ -2744,7 +2744,7 @@ bool compareBranches() {
     // Ask user to continue
     QString answer = getInput(QString(":: Compare branch '%1' with branch '%2'.\n   Continue? [Y/n] ").arg(firstBranchName, secondBranchName), false, false).toLower().trimmed();
     if (!answer.isEmpty() && answer != "y") {
-        cerr << "abording..." << endl;
+        cerr << "aborting..." << endl;
         return false;
     }
 
