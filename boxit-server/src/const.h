@@ -33,7 +33,7 @@
 #define BOXIT_STATUS_TMP "/var/tmp/boxit/status"
 #define BOXIT_DB_CONFIG ".config"
 #define BOXIT_DB_SYNC_EXCLUDE ".sync_exclude"
-#define BOXIT_ARCHITECTURES "i686 x86_64"
+#define BOXIT_ARCHITECTURES "aarch64 arm armv6h armv7h"
 #define BOXIT_OVERLAY_POOL "pool/overlay"
 #define BOXIT_SYNC_POOL "pool/sync"
 #define BOXIT_PACKAGE_FILTERS "*.pkg.tar.xz *.pkg.tar.gz"
