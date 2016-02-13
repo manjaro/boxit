@@ -280,10 +280,6 @@ void Repo::run() {
     if (QFile::exists(path + "/" + repoDB))
         QFile::copy(path + "/" + repoDB, tmpPath + "/" + repoDB);
 
-    // Copy database files - error isn't critical
-    if (QFile::exists(path + "/" + repoFiles))
-        QFile::copy(path + "/" + repoFiles, tmpPath + "/" + repoFiles);
-
     // Status update
     Status::setRepoStateChanged(branchName, name, architecture, "building package database", "", Status::STATE_RUNNING);
 
@@ -323,39 +319,18 @@ void Repo::run() {
         goto error;
     }
 
-    // Remove old database files
-    if (QFile::exists(path + "/" + repoFiles) && !QFile::remove(path + "/" + repoFiles)) {
-        threadErrorString = "error: failed to remove old database files!";
-        goto error;
-    }
-
     // Copy database
     if (!QFile::exists(tmpPath + "/" + repoDB) || !QFile::copy(tmpPath + "/" + repoDB, path + "/" + repoDB)) {
         threadErrorString = "error: failed to copy new database!";
         goto error;
     }
 
-    // Copy database files
-    if (!QFile::exists(tmpPath + "/" + repoFiles) || !QFile::copy(tmpPath + "/" + repoFiles, path + "/" + repoFiles)) {
-        threadErrorString = "error: failed to copy new database files!";
-        goto error;
-    }
-
     // Fix file permissions of database
     Global::fixFilePermission(path + "/" + repoDB);
-
-    // Fix file permissions of database files
-    Global::fixFilePermission(path + "/" + repoFiles);
 
     // Link database
     if (!symlinkExists(path + "/" + repoDBLink) && !QFile::link(repoDB, path + "/" + repoDBLink)) {
         threadErrorString = "error: failed to link new database!";
-        goto error;
-    }
-
-    // Link database files
-    if (!symlinkExists(path + "/" + repoFilesLink) && !QFile::link(repoFiles, path + "/" + repoFilesLink)) {
-        threadErrorString = "error: failed to link new database files!";
         goto error;
     }
 
@@ -520,8 +495,8 @@ bool Repo::applySymlinks(const QList<Package> & packages, const QString path, co
 
     // Remove all files and symlinks
     foreach (const QString file, localFiles) {
-        // Skip database (files) and database (files) link
-        if (file == repoDB || file == repoDBLink || file == repoFiles || file == repoFilesLink)
+        // Skip database and database link
+        if (file == repoDB || file == repoDBLink)
             continue;
 
         QString dest = path + "/" + file;
@@ -719,30 +694,6 @@ bool Repo::removePackagesFromDatabase(const QStringList & packages) {
 
     if (process.exitCode() != 0) {
         threadErrorString = "error: failed to remove packages from database: " + QString::fromUtf8(process.readAll());
-        return false;
-    }
-
-    return true;
-}
-
-
-
-bool Repo::updateFilesToDatabase(const QStringList & packages) {
-    if (packages.isEmpty())
-        return true;
-
-    QProcess process;
-    process.setProcessChannelMode(QProcess::MergedChannels);
-    process.setWorkingDirectory(tmpPath);
-    process.start("repo-add -f", QStringList() << repoFiles <<  packages);
-
-    if (!process.waitForFinished(-1)) {
-        threadErrorString = "error: update files to database process failed to finish!";
-        return false;
-    }
-
-    if (process.exitCode() != 0) {
-        threadErrorString = "error: failed to update files to database: " + QString::fromUtf8(process.readAll());
         return false;
     }
 
