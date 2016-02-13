@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/bash
 #
 #   pkgdelta - create delta files for use with pacman and repo-add
 #   Generated from pkgdelta.sh.in; do not edit by hand.
@@ -26,7 +26,7 @@ set -o errexit
 export TEXTDOMAIN='pacman-scripts'
 export TEXTDOMAINDIR='/usr/share/locale'
 
-declare -r myver='4.1.0'
+declare -r myver='5.0.0'
 
 QUIET=0
 USE_COLOR='y'
@@ -215,11 +215,14 @@ error() {
 
 # print usage instructions
 usage() {
-	printf "pkgdelta (pacman) %s\n\n" "$myver"
+	printf "pkgdelta (pacman) %s\n" "${myver}"
+	echo
 	printf -- "$(gettext "Usage: pkgdelta [options] <package1> <package2>\n")"
+	echo
 	printf -- "$(gettext "\
-	pkgdelta will create a delta file between two packages.\n\
-This delta file can then be added to a database using repo-add.\n\n")"
+pkgdelta will create a delta file between two packages.\n\
+This delta file can then be added to a database using repo-add.\n")"
+	echo
 	printf -- "$(gettext "Example:  pkgdelta pacman-3.0.0.pkg.tar.gz pacman-3.0.1.pkg.tar.gz")\n"
 	echo
 	printf -- "$(gettext "Options:\n")"
@@ -230,7 +233,7 @@ This delta file can then be added to a database using repo-add.\n\n")"
 }
 
 version() {
-	printf "pkgdelta (pacman) %s\n\n" "$myver"
+	printf "pkgdelta (pacman) %s\n" "$myver"
 	printf -- "$(gettext "\
 Copyright (c) 2009 Xavier Chantry <shiningxc@gmail.com>.\n\n\
 This is free software; see the source for copying conditions.\n\
@@ -357,7 +360,7 @@ create_xdelta()
 	deltafile=$(dirname "$newfile")/$pkgname-${oldver}_to_${newver}-$arch.delta
 	local ret=0
 
-	xdelta3 -q -f -s "$oldfile" "$newfile" "$deltafile" || ret=$?
+	xdelta3 -q -f -9 -S lzma -s "$oldfile" "$newfile" "$deltafile" || ret=$?
 	if (( ret )); then
 		error "$(gettext "Delta could not be created.")"
 		return 1
@@ -461,4 +464,4 @@ fi
 
 create_xdelta "$@"
 
-# vim: set ts=2 sw=2 noet:
+# vim: set noet:
