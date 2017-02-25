@@ -41,6 +41,8 @@
 #define BOXIT_DB_ENDING ".db.tar.gz"
 #define BOXIT_DB_LINK_ENDING ".db"
 #define BOXIT_DB_DESC_FILE "desc"
+#define BOXIT_FILES_DB_ENDING ".files.tar.gz"
+#define BOXIT_FILES_DB_LINK_ENDING ".files"
 #define BOXIT_REMOVE_ORPHANS_AFTER_DAYS 3
 #define BOXIT_STATE_FILE "state"
 #define BOXIT_SYSTEM_USERNAME "system"

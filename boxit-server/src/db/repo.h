@@ -93,7 +93,7 @@ private:
         }
     };
 
-    const QString branchName, name, architecture, path, tmpPath, repoDB, repoDBLink;
+    const QString branchName, name, architecture, path, tmpPath, repoDB, repoDBLink, repoFiles, repoFilesLink;
     QString state, lockedUsername, threadUsername, threadErrorString;
     int lockedSessionID, threadSessionID;
     bool isSyncRepo, waitingCommit, isCommitting;
