@@ -59,8 +59,8 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    if (!connection.registerService("org.BoxIt-32.Keyring")) {
-        cerr << "error: failed to register DBus Service 'org.BoxIt-32.Keyring'!" << endl;
+    if (!connection.registerService("org.BoxIt32.Keyring")) {
+        cerr << "error: failed to register DBus Service 'org.BoxIt32.Keyring'!" << endl;
 
         if (!connection.lastError().message().isEmpty())
             cerr << QString("error message: %1").arg(connection.lastError().message()).toUtf8().data() << endl;
