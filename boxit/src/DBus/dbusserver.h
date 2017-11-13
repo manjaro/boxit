@@ -38,7 +38,7 @@
 class DBusServer : public QDBusAbstractAdaptor
 {
     Q_OBJECT
-    Q_CLASSINFO("D-Bus Interface", "org.BoxIt.Keyring")
+    Q_CLASSINFO("D-Bus Interface", "org.BoxIt-32.Keyring")
 
 public:
     explicit DBusServer(QObject *parent = 0);

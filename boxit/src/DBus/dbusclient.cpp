@@ -23,7 +23,7 @@
 
 
 DBusClient::DBusClient() :
-    QDBusInterface("org.BoxIt.Keyring", "/", "org.BoxIt.Keyring", QDBusConnection::sessionBus())
+    QDBusInterface("org.BoxIt-32.Keyring", "/", "org.BoxIt-32.Keyring", QDBusConnection::sessionBus())
 {
 }
 
