@@ -20,7 +20,7 @@ case "$1" in
       ;;
    stop)
       echo "Stopping boxit server..."
-      killall boxit-server-32
+      killall boxit-32-server
       ;;
    restart|reload|force-reload)
    $0 stop
