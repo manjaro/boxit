@@ -22,8 +22,8 @@
 #define CONST_H
 
 
-#define BOXIT_VERSION 6
-#define BOXIT_PORT 59872
+#define BOXIT_VERSION 7
+#define BOXIT_PORT 59870
 #define BOXIT_SPLIT_CHAR "|"
 #define BOXIT_SOCKET_MAX_SIZE 50000
 #define BOXIT_SERVER_CONFIG "/etc/boxit/boxit.conf"
@@ -33,9 +33,9 @@
 #define BOXIT_STATUS_TMP "/var/tmp/boxit/status"
 #define BOXIT_DB_CONFIG ".config"
 #define BOXIT_DB_SYNC_EXCLUDE ".sync_exclude"
-#define BOXIT_ARCHITECTURES "i686 x86_64"
-#define BOXIT_OVERLAY_POOL "pool/overlay"
-#define BOXIT_SYNC_POOL "pool/sync"
+#define BOXIT_ARCHITECTURES "i686"
+#define BOXIT_OVERLAY_POOL "pool/overlay-32"
+#define BOXIT_SYNC_POOL "pool/sync-32"
 #define BOXIT_PACKAGE_FILTERS "*.pkg.tar.xz *.pkg.tar.gz"
 #define BOXIT_SIGNATURE_ENDING ".sig"
 #define BOXIT_DB_ENDING ".db.tar.gz"

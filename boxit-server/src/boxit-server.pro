@@ -8,7 +8,7 @@ QT       += core network
 
 QT       -= gui
 
-TARGET = boxit-server
+TARGET = boxit-32-server
 CONFIG   += console
 CONFIG   -= app_bundle
 

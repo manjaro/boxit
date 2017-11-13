@@ -9,7 +9,7 @@ QT       -= gui
 
 LIBS    += -lreadline
 
-TARGET = boxit
+TARGET = boxit-32
 CONFIG   += console
 CONFIG   -= app_bundle
 
