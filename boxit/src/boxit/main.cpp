@@ -459,7 +459,7 @@ bool startKeyringServiceIfRequired() {
         return true;
 
     // Start service
-    if (!QProcess::startDetached("boxit-keyring"))
+    if (!QProcess::startDetached("boxit-32-keyring"))
         return false;
 
     // Wait for service to start

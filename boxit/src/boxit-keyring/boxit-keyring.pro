@@ -7,7 +7,7 @@
 QT       += core dbus
 QT       -= gui
 
-TARGET = boxit-keyring
+TARGET = boxit-32-keyring
 CONFIG   += console
 CONFIG   -= app_bundle
 
