@@ -28,7 +28,7 @@
 #define BOXIT_SOCKET_MAX_SIZE 50000
 #define BOXIT_SERVER_CONFIG "/etc/boxit-32/boxit.conf"
 #define BOXIT_USER_DBFILE "/etc/boxit-32/users.db"
-#define BOXIT_TMP "/var/tmp/boxit"
+#define BOXIT_TMP "/var/tmp/boxit-32"
 #define BOXIT_SESSION_TMP "/var/tmp/boxit-32/sessions"
 #define BOXIT_STATUS_TMP "/var/tmp/boxit-32/status"
 #define BOXIT_DB_CONFIG ".config"
