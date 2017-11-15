@@ -31,7 +31,7 @@
 #define BOXIT_TMP "/var/tmp/boxit-32"
 #define BOXIT_SESSION_TMP "/var/tmp/boxit-32/sessions"
 #define BOXIT_STATUS_TMP "/var/tmp/boxit-32/status"
-#define BOXIT_DB_CONFIG ".config"
+#define BOXIT_DB_CONFIG ".config-32"
 #define BOXIT_DB_SYNC_EXCLUDE ".sync_exclude"
 #define BOXIT_ARCHITECTURES "i686"
 #define BOXIT_OVERLAY_POOL "pool/overlay-32"
