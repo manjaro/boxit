@@ -40,12 +40,12 @@
 #include <QFileInfo>
 #include <QMap>
 #include <QProcess>
+#include <QTimer>
 #include <dbusclient.h>
 
 #include "boxitsocket.h"
 #include "const.h"
 #include "version.h"
-#include "timeoutreset.h"
 #include "interactiveprocess.h"
 
 using namespace std;
@@ -2160,7 +2160,14 @@ bool uploadData(const QString path, const int currentIndex, const int maxIndex) 
 
 
 bool listenOnStatus(bool exitOnSessionEnd) {
-    TimeOutReset timeOutReset(&boxitSocket);
+    QTimer timer;
+    QObject::connect(&timer, &QTimer::timeout,
+    [=]( ) {
+        if (boxitSocket.state() != QAbstractSocket::ConnectedState)
+            return;
+        boxitSocket.sendData(MSG_RESET_TIMEOUT); }
+    );
+
     QString host = "";
 
     if (!connectAndLoginToHost(host))
@@ -2175,7 +2182,7 @@ bool listenOnStatus(bool exitOnSessionEnd) {
     }
 
     // Start our reset timeout timer
-    timeOutReset.start();
+    timer.start(10000);
 
     bool firstBranch = true;
     bool firstRepo = true;

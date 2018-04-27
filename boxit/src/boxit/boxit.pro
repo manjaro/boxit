@@ -19,14 +19,12 @@ TEMPLATE = app
 SOURCES += main.cpp \
     boxitsocket.cpp \
     version.cpp \
-    timeoutreset.cpp \
     interactiveprocess.cpp
 
 HEADERS += \
     boxitsocket.h \
     const.h \
     version.h \
-    timeoutreset.h \
     interactiveprocess.h
 
 
